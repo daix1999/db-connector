@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "db-connector"
+version = "1.0.0"
+description = "可插拔本地数据库连接器（两层抽象·多方言）：MySQL / Redis / MongoDB，含 stdio MCP server。"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "daix1999" }]
+keywords = ["database", "mysql", "redis", "mongodb", "connector", "mcp"]
+
+# 核心仅需关系型；NoSQL 与 MCP 为可选分组
+dependencies = [
+    "PyMySQL>=1.1.0",
+    "DBUtils>=3.1.0",
+]
+
+[project.optional-dependencies]
+redis = ["redis>=5.0.0"]
+mongo = ["pymongo>=4.6"]
+mcp = ["mcp>=2.0.0"]
+all = ["redis>=5.0.0", "pymongo>=4.6", "mcp>=2.0.0"]
+
+[project.scripts]
+db-connector-mcp = "mcp_server.server:mcp.run"
+
+[tool.setuptools]
+packages = ["dbconnector", "dbconnector.connectors", "mcp_server"]

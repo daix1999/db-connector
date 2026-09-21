@@ -1,0 +1,16 @@
+{
+  "_comment": "集成版：一个连接器同时挂 MySQL + Redis + MongoDB。DB_SOURCES 是 JSON 字符串(内层双引号需转义)。合并进 千问办公 MCP 配置即可，agent 用 source 参数切换数据源。默认全部只读(allow_write=false)。",
+  "mcpServers": {
+    "db-connector": {
+      "type": "stdio",
+      "command": "C:\\Users\\Administrator\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+      "args": ["-m", "mcp_server.server"],
+      "cwd": "C:\\Users\\Administrator\\.qwenworkcn\\workspace\\mu9a4nao0bpihtne\\outputs\\db-connector",
+      "env": {
+        "DB_SOURCES": "[{\"name\":\"mysql\",\"dialect\":\"mysql\",\"host\":\"127.0.0.1\",\"port\":3306,\"user\":\"root\",\"password\":\"<MySQL密码>\",\"database\":\"test\"},{\"name\":\"redis\",\"dialect\":\"redis\",\"host\":\"127.0.0.1\",\"port\":6379,\"database\":\"0\"},{\"name\":\"mongo\",\"dialect\":\"mongodb\",\"host\":\"127.0.0.1\",\"port\":27017,\"database\":\"admin\"}]",
+        "DB_ALLOW_WRITE": "false",
+        "DB_MAX_ROWS": "200"
+      }
+    }
+  }
+}

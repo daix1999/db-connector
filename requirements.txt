@@ -1,0 +1,10 @@
+# 关系型（MySQL）核心依赖
+PyMySQL>=1.1.0
+DBUtils>=3.1.0
+
+# MCP server
+mcp>=2.0.0
+
+# NoSQL 方言（按需装：不装则该方言连接时报错，但仍可注册/导入）
+redis>=5.0.0        # connect("redis", ...)
+pymongo>=4.6        # connect("mongodb", ...)
