@@ -82,4 +82,4 @@ python scripts/smoke_test.py --user root --password ... --database test
 
 ## 版本与许可
 
-1.x 稳定线。2.0.0：模板收口、读写分离分级授权 + 一次性确认令牌、分层文档。2.1.0：把分级授权流程下沉到根（`dbconnector/acl.py` + `BaseConnector.authorize`），所有模板共用同一套 classify→decide 管线。向后兼容（`DBConnector` 别名、`nosql` 垫片、`allow_write` 映射）。许可证：MIT。
+1.x 稳定线。2.0.0：模板收口、读写分离分级授权 + 一次性确认令牌、分层文档。2.1.0：分级授权流程下沉到根（`dbconnector/acl.py` + `BaseConnector.authorize`），所有模板共用同一套 classify→decide 管线。2.2.0：权限档 profile + 同一插件多环境各配权限（授权对象=连接 source，无角色）。向后兼容（`DBConnector` 别名、`nosql` 垫片、`allow_write` 映射）。许可证：MIT。

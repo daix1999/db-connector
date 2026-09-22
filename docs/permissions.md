@@ -80,6 +80,31 @@ level <= T3 且 allow_escalation   -> 需要确认（返回确认令牌）
 
 令牌 = `HMAC(secret, source|op|level|target|exp)`，默认 300 秒过期（`DB_CONFIRM_TTL`），**绑定具体操作**：换个表/命令旧令牌无效（会再次要求确认）。agent 把它呈现给用户，用户同意后带 `confirm="<token>"` 用相同参数重发即执行。密钥用 `DB_CONFIRM_SECRET`（不设则每进程随机，重启即作废）。
 
+## 权限档与多环境（插件写一次，环境各配权限）
+
+授权对象是**连接目标（source）本身**——一个 source 就是"某主机:端口/某库"的一个具体连接，没有角色概念。
+
+- **插件按方言只写一次**（`connectors/mysql.py` 等）。
+- **同一方言可挂多个环境**，各是一个 source、各带各的 host/port/账号/库，也各挂各的权限。例：本机 MySQL 8.0(生产) 与 5.7(测试)、docker 里的 8.0，都用同一个 mysql 插件，但权限不同。
+- **权限档 profile** 让同类环境共享一套权限（缓存一档、业务库一档），个别环境引用档后再内联微调：
+
+```jsonc
+// env DB_ACCESS_PROFILES
+{"prod":{"grant":"read","allow_escalation":true},
+ "sandbox":{"grant":"read+destructive"},
+ "cache":{"grant":"read+data"}}
+
+// env DB_SOURCES：access 可为 档名字符串 / 内联 dict / {"profile":"..", 覆盖..}
+[
+ {"name":"mysql8-prod","dialect":"mysql","port":3306,"database":"biz","user":"app_ro","access":"prod"},
+ {"name":"mysql57-sandbox","dialect":"mysql","port":3307,"database":"legacy","access":"sandbox"},
+ {"name":"mysql8-audit","dialect":"mysql","port":3306,"database":"biz",
+  "access":{"profile":"prod","write_deny":["audit_log"]}}   // 沿用 prod 档 + 本环境再禁写 audit_log
+]
+```
+
+解析优先级：内联字段 > profile。`source` 名要能区分环境（含实例/端口/用途），MCP 工具用 `source` 参数路由到对应环境与权限。
+
 ## 向后兼容
 
 无 `access` 时：

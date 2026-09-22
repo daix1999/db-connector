@@ -1,17 +1,22 @@
 """MCP server 配置：多源 DB_SOURCES（推荐）或单方言老变量（兼容）。
 
-每个源除连接参数外，带一个 `access` 权限块（读写分离分级授权）：
-    "access": {
-      "read": true,                       # 读是否放行（默认 true）
-      "grant": "read",                    # 免确认直达的最高操作级：read|read+data|read+schema|read+destructive|admin
-      "write_allow": ["sales.*"],         # 写白名单(可选)：给了就只允许这些目标(库/表/collection/key前缀 glob)
-      "write_deny":  ["sales.audit"],     # 写黑名单：命中必拒，优先于白名单
-      "confirm_above": null,              # 超过该级需二次确认(默认=grant)；配合 allow_escalation 可越权确认
-      "allow_escalation": false           # true 时：超过 grant(≤破坏性) 的操作可用一次性确认令牌放行
-    }
+插件按方言只写一次；一个进程可挂任意多个"环境(source)"，多个 source 可同属一个方言。
+授权对象是"连接目标(source)"本身，不设角色。权限既可按源内联，也可引用可复用的"权限档 profile"
+（缓存归缓存、业务库归业务库共享一档，个别环境再内联微调）。
 
-向后兼容：无 access 时，`allow_write:true` 视为 grant=read+destructive 且不需确认；false 视为 grant=read 且不可升级。
-全局兜底：DB_ALLOW_WRITE / DB_MAX_ROWS。
+env DB_ACCESS_PROFILES（JSON dict，档名 -> access）：
+    {"prod":{"grant":"read","allow_escalation":true},
+     "sandbox":{"grant":"read+destructive"},
+     "cache":{"grant":"read+data"}}
+env DB_SOURCES（JSON 数组），每项 access 可为 档名字符串 / dict / {"profile":"prod",..覆盖..}：
+    {"name":"mysql8-prod","dialect":"mysql","host":"127.0.0.1","port":3306,"user":"app",
+     "password":"...","database":"biz","access":"prod","max_rows":200}
+    {"name":"mysql57-test","dialect":"mysql","host":"127.0.0.1","port":3307,"user":"root",
+     "password":"...","database":"legacy","access":"sandbox"}
+    {"name":"audit","dialect":"mysql",...,"access":{"profile":"prod","write_deny":["audit_log"]}}
+
+access 细则见 dbconnector/acl.py 与 docs/permissions.md。全局兜底 DB_ALLOW_WRITE / DB_MAX_ROWS。
+向后兼容：无 access 时 allow_write=true ≈ grant=read+destructive 免确认；false ≈ grant=read。
 """
 from __future__ import annotations
 
@@ -60,10 +65,36 @@ class ServerSettings:
         return None
 
 
-def _parse_access(item: dict, g_allow: bool) -> Access:
+def _load_profiles() -> dict:
+    """全局权限档：env DB_ACCESS_PROFILES（JSON dict，档名 -> access 定义）。"""
+    raw = _env("DB_ACCESS_PROFILES")
+    return json.loads(raw) if raw else {}
+
+
+def _resolve_access_dict(item: dict, profiles: dict) -> dict | None:
+    """把 source 的 access 解析成有效 dict：
+       - access 为字符串   → 引用权限档 profile
+       - access 为 dict 且含 "profile" → 档 + 内联覆盖(内联优先)
+       - access 为普通 dict → 内联
+       - 无 access          → None（走 allow_write 兼容）
+    """
     a = item.get("access")
+    if isinstance(a, str):
+        return dict(profiles.get(a, {}))
     if isinstance(a, dict):
-        return Access.from_dict(a)
+        base: dict = {}
+        if "profile" in a:
+            base = dict(profiles.get(a["profile"], {}))
+            a = {k: v for k, v in a.items() if k != "profile"}
+        base.update(a)   # 内联覆盖 profile
+        return base
+    return None
+
+
+def _parse_access(item: dict, profiles: dict, g_allow: bool) -> Access:
+    d = _resolve_access_dict(item, profiles)
+    if d is not None:
+        return Access.from_dict(d)
     return Access.from_legacy(_truthy(item.get("allow_write"), g_allow))
 
 
@@ -71,7 +102,7 @@ def _global_defaults() -> tuple[bool, int]:
     return _truthy(_env("DB_ALLOW_WRITE"), False), int(_env("DB_MAX_ROWS", "200"))
 
 
-def _build_source(item: dict, g_allow: bool, g_max: int) -> Source:
+def _build_source(item: dict, profiles: dict, g_allow: bool, g_max: int) -> Source:
     dialect = item["dialect"]
     port = item.get("port")
     pool_kwargs = {k: v for k, v in item.items()
@@ -85,11 +116,12 @@ def _build_source(item: dict, g_allow: bool, g_max: int) -> Source:
         extra=item.get("extra", {}),
     )
     return Source(name=item.get("name", dialect), config=cfg,
-                  access=_parse_access(item, g_allow), max_rows=int(item.get("max_rows", g_max)))
+                  access=_parse_access(item, profiles, g_allow), max_rows=int(item.get("max_rows", g_max)))
 
 
 def load_settings() -> ServerSettings:
     g_allow, g_max = _global_defaults()
+    profiles = _load_profiles()
     raw = _env("DB_SOURCES")
     if raw:
         items = json.loads(raw)
@@ -97,7 +129,7 @@ def load_settings() -> ServerSettings:
             items = [items]
         srcs = {}
         for it in items:
-            s = _build_source(it, g_allow, g_max)
+            s = _build_source(it, profiles, g_allow, g_max)
             srcs[s.name] = s
         return ServerSettings(sources=srcs)
 
@@ -106,5 +138,5 @@ def load_settings() -> ServerSettings:
               "database": _env("DB_DATABASE"), "dsn": _env("DB_DSN")}
     single = {k: v for k, v in single.items() if v not in (None, "")}
     dialect = single.get("dialect", "mysql")
-    s = _build_source({"name": dialect, **single}, g_allow, g_max)
+    s = _build_source({"name": dialect, **single}, profiles, g_allow, g_max)
     return ServerSettings(sources={dialect: s})

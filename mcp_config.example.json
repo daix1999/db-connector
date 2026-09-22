@@ -1,5 +1,9 @@
 {
-  "_comment": "集成版：一个连接器同时挂 MySQL + Redis + MongoDB。DB_SOURCES 是 JSON 字符串(内层双引号需转义)。合并进 千问办公 MCP 配置即可，agent 用 source 参数切换数据源。默认全部只读(allow_write=false)。",
+  "_readme": "集成示例：一个连接器 = 一个插件集 + 多个运行环境(source)。同一个 mysql 插件被多个环境复用，各环境通过 access 引用可复用的权限档(profile)，个别环境再内联微调。授权对象是连接目标(source)本身，无角色。改 cwd/密码后合并进 千问办公 MCP 配置；默认最安全(prod 类只读)。",
+  "_env_notes": {
+    "DB_ACCESS_PROFILES": "权限档字典(JSON)。可复用：缓存一档、业务库一档。",
+    "DB_SOURCES": "环境列表(JSON)。每项 access 可为：档名字符串 / 内联 dict / {\"profile\":\"档名\", ...覆盖}。"
+  },
   "mcpServers": {
     "db-connector": {
       "type": "stdio",
@@ -7,9 +11,20 @@
       "args": ["-m", "mcp_server.server"],
       "cwd": "C:\\Users\\Administrator\\.qwenworkcn\\workspace\\mu9a4nao0bpihtne\\outputs\\db-connector",
       "env": {
-        "DB_SOURCES": "[{\"name\":\"mysql\",\"dialect\":\"mysql\",\"host\":\"127.0.0.1\",\"port\":3306,\"user\":\"root\",\"password\":\"<MySQL密码>\",\"database\":\"test\"},{\"name\":\"redis\",\"dialect\":\"redis\",\"host\":\"127.0.0.1\",\"port\":6379,\"database\":\"0\"},{\"name\":\"mongo\",\"dialect\":\"mongodb\",\"host\":\"127.0.0.1\",\"port\":27017,\"database\":\"admin\"}]",
-        "DB_ALLOW_WRITE": "false",
-        "DB_MAX_ROWS": "200"
+        "DB_ACCESS_PROFILES": "{\"prod\":{\"read\":true,\"grant\":\"read\",\"allow_escalation\":true},\"sandbox\":{\"read\":true,\"grant\":\"read+destructive\",\"allow_escalation\":true},\"cache\":{\"read\":true,\"grant\":\"read+data\"},\"report\":{\"read\":true,\"grant\":\"read\"}}",
+        "DB_SOURCES": "[{\"name\":\"mysql8-prod\",\"dialect\":\"mysql\",\"host\":\"127.0.0.1\",\"port\":3306,\"user\":\"app_ro\",\"password\":\"<生产只读账号密码>\",\"database\":\"biz\",\"access\":\"prod\"},{\"name\":\"mysql57-sandbox\",\"dialect\":\"mysql\",\"host\":\"127.0.0.1\",\"port\":3307,\"user\":\"root\",\"password\":\"<测试库密码>\",\"database\":\"legacy\",\"access\":\"sandbox\"},{\"name\":\"mysql8-docker\",\"dialect\":\"mysql\",\"host\":\"127.0.0.1\",\"port\":3308,\"user\":\"root\",\"password\":\"<容器测试密码>\",\"database\":\"dockertest\",\"access\":\"sandbox\"},{\"name\":\"redis-cache\",\"dialect\":\"redis\",\"host\":\"127.0.0.1\",\"port\":6379,\"database\":\"0\",\"access\":\"cache\"},{\"name\":\"redis-sessions\",\"dialect\":\"redis\",\"host\":\"127.0.0.1\",\"port\":6379,\"database\":\"1\",\"access\":\"prod\"},{\"name\":\"mongo-analytics\",\"dialect\":\"mongodb\",\"host\":\"127.0.0.1\",\"port\":27017,\"database\":\"analytics\",\"access\":\"report\"},{\"name\":\"mysql8-prod-strict\",\"dialect\":\"mysql\",\"host\":\"127.0.0.1\",\"port\":3306,\"user\":\"app\",\"password\":\"<密码>\",\"database\":\"biz\",\"access\":{\"profile\":\"prod\",\"write_deny\":[\"audit_log\",\"user_credential\"]}}]",
+        "DB_MAX_ROWS": "200",
+        "DB_AUDIT": "on",
+        "DB_AUDIT_LAYER": "all",
+        "DB_CONFIRM_TTL": "300",
+        "DB_CONFIRM_SECRET": "<随机串;不设则每进程随机、重启即作废>"
+      },
+      "_source_legend": {
+        "mysql8-prod / mysql8-prod-strict": "生产(8.0) → prod 档：只读；写/DROP 需确认令牌；strict 版再禁写 audit_log/user_credential",
+        "mysql57-sandbox / mysql8-docker": "测试(5.7:3307 / docker:3308) → sandbox 档：给到破坏性、免确认（同插件不同环境不同权限）",
+        "redis-cache": "缓存 → cache 档：读+数据写",
+        "redis-sessions": "会话 → prod 档：只读为主",
+        "mongo-analytics": "报表 → report 档：只读"
       }
     }
   }
