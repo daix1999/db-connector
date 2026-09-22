@@ -10,7 +10,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-from . import audit
+from . import acl, audit, levels
 from .config import ConnectorConfig
 from .result import Result
 
@@ -26,6 +26,20 @@ class BaseConnector(ABC):
     default_port: int | None = None
     #: 需要自动审计的操作方法名（各模板声明；BaseConnector 在建类时统一包装）
     AUDITED_OPS: tuple = ()
+    #: 操作名 -> 风险等级 的静态映射（模板覆盖；classify 兜底用）
+    OP_LEVELS: dict = {}
+
+    def classify(self, op: str, args: dict | None = None) -> tuple[int, Any]:
+        """把一次操作归为 (level, target)。默认查 OP_LEVELS，未列出的按 WRITE_DATA（保守）。"""
+        args = args or {}
+        return self.OP_LEVELS.get(op, levels.WRITE_DATA), args.get("target")
+
+    def authorize(self, access, op: str, args: dict | None = None) -> tuple[str, str, int]:
+        """统一分级授权流程：classify → acl.decide。返回 (verdict, reason, level)。
+        这是"所有模板共用一套流程"的落点；本方法只给判定，不改变连接器自身能力。"""
+        level, target = self.classify(op, args or {})
+        verdict, reason = acl.decide(access, level, target)
+        return verdict, reason, level
 
     def __init_subclass__(cls, **kw):
         """按 AUDITED_OPS 自动包装操作 → 无论经 MCP 还是直调库，落库操作都留痕。

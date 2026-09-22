@@ -73,6 +73,7 @@ Redis / Mongo 同理：`connect("redis", ...)` / `connect("mongodb", ...)`。
 ```bash
 python tests/test_offline.py                         # 注册表/配置/结果
 python tests/test_guard.py && python tests/test_guard_nosql.py
+python tests/test_acl.py                            # 根层分级授权(所有模板共用)
 python tests/test_audit.py                            # 脱敏/成功/拒绝/事务逐条
 python tests/test_permissions.py --user root --password ...   # 分级授权+确认流(需容器)
 python tests/test_mcp_stdio.py --user root --password ...     # 关系型真实端到端
@@ -81,4 +82,4 @@ python scripts/smoke_test.py --user root --password ... --database test
 
 ## 版本与许可
 
-1.x 稳定线。2.0.0：模板收口（通用探查归模板、插件只填原语）、读写分离分级授权 + 一次性确认令牌、分层文档。向后兼容（`DBConnector` 别名、`nosql` 垫片、`allow_write` 映射）。许可证：MIT。
+1.x 稳定线。2.0.0：模板收口、读写分离分级授权 + 一次性确认令牌、分层文档。2.1.0：把分级授权流程下沉到根（`dbconnector/acl.py` + `BaseConnector.authorize`），所有模板共用同一套 classify→decide 管线。向后兼容（`DBConnector` 别名、`nosql` 垫片、`allow_write` 映射）。许可证：MIT。

@@ -16,7 +16,7 @@ from abc import abstractmethod
 from contextlib import contextmanager
 from typing import Any
 
-from .. import audit
+from .. import audit, levels
 from ..base import BaseConnector
 from ..config import ConnectorConfig
 from ..exceptions import ConnectionError_, QueryError
@@ -33,6 +33,18 @@ class RelationalConnector(BaseConnector):
     #: transaction 不在此列——由 transaction() 内部手动做逐条+汇总审计，避免重复/失真
     AUDITED_OPS = ("query", "execute", "execute_returning_id", "execute_many",
                    "list_sources", "describe_source", "get_source")
+    #: 操作 → 风险等级（execute 类按 SQL 内容动态判，见 classify）
+    OP_LEVELS = {"query": 0, "list_sources": 0, "describe_source": 0, "get_source": 0,
+                 "fetch_one": 0, "fetch_value": 0, "ping": 0,
+                 "execute": 1, "execute_returning_id": 1, "execute_many": 1, "transaction": 1}
+
+    def classify(self, op: str, args: dict | None = None):
+        args = args or {}
+        if op in ("execute", "execute_returning_id", "execute_many"):
+            sql = args.get("sql", "")
+            ts = levels.sql_targets(sql)
+            return levels.classify_sql(sql), (ts[0] if ts else args.get("target"))
+        return super().classify(op, args)
 
     def __init__(self, config: ConnectorConfig):
         super().__init__(config)

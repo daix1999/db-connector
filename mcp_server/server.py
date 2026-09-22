@@ -92,11 +92,13 @@ def _target(source, family):
     return src, _conn(src)
 
 
-def _authorize(src: Source, op: str, level: int, target, confirm: str | None):
-    """统一写/授权闸门。返回 None=放行执行；返回 dict=需确认（未执行）；抛 ToolError=拒绝。"""
-    verdict, reason = guard.decide(src.access, level, target)
+def _authorize(src: Source, conn, op: str, args: dict, confirm: str | None):
+    """统一授权闸门：调用根层 conn.authorize()（所有模板同一流程），MCP 只加确认令牌。
+    返回 None=放行；dict=需确认（未执行）；抛 ToolError=拒绝。"""
+    verdict, reason, level = conn.authorize(src.access, op, args)
     if verdict == "allow":
         return None
+    _, target = conn.classify(op, args)
     if verdict == "confirm":
         token, exp = guard.issue_token(src.name, op, level, target)
         if confirm and guard.verify_token(confirm, src.name, op, level, target):
@@ -104,8 +106,7 @@ def _authorize(src: Source, op: str, level: int, target, confirm: str | None):
         return {
             "requires_confirmation": True, "source": src.name, "op": op,
             "risk_level": levels.level_name(level), "target": target,
-            "intent": reason, "confirm_token": token,
-            "expires_at_epoch": exp,
+            "intent": reason, "confirm_token": token, "expires_at_epoch": exp,
             "next": f"确认该操作后，用相同参数再调一次并附 confirm=\"{token}\"",
         }
     raise ToolError(reason)   # deny
@@ -191,7 +192,7 @@ def query(sql: str, params: list | None = None, source: str | None = None) -> di
     src, conn = _target(source, "relational")
     if not guard.is_read_only(sql):
         raise ToolError("query 仅允许只读语句。需要写数据请用 execute（按该源 grant/确认放行）。")
-    gate = _authorize(src, "query", levels.READ, None, None)
+    gate = _authorize(src, conn, "query", {}, None)
     if gate:
         return gate
     final = guard.ensure_limit(sql, src.max_rows)
@@ -213,8 +214,7 @@ def execute(sql: str, params: list | None = None, source: str | None = None,
         raise ToolError("出于安全，execute 一次只允许一条语句，拒绝多语句拼接。")
     if guard.is_read_only(sql):
         raise ToolError("这是只读语句，请改用 query 工具。")
-    targets = levels.sql_targets(sql)
-    gate = _authorize(src, "execute", levels.classify_sql(sql), targets[0] if targets else None, confirm)
+    gate = _authorize(src, conn, "execute", {"sql": sql}, confirm)
     if gate:
         return gate
     try:
@@ -247,9 +247,7 @@ def redis_command(name: str, args: list | None = None, source: str | None = None
                   confirm: str | None = None) -> dict:
     """任意 Redis 命令。按 levels 分级 + 源 grant 放行；超阈值返回确认令牌；管理员级(FLUSHALL/CONFIG/SHUTDOWN…)恒拒。"""
     src, conn = _target(source, "keyvalue")
-    level = levels.classify_redis(name)
-    target = args[0] if args else None
-    gate = _authorize(src, f"redis:{name}", level, target, confirm)
+    gate = _authorize(src, conn, "command", {"name": name, "args": args or []}, confirm)
     if gate:
         return gate
     try:
@@ -285,12 +283,15 @@ def mongo_aggregate(collection: str, pipeline: list, source: str | None = None,
                     confirm: str | None = None) -> dict:
     """聚合查询。含 $out/$merge 的写型管道按破坏性级处理（按 grant/确认放行）。"""
     src, conn = _target(source, "document")
-    level = levels.classify_mongo("aggregate", pipeline)
-    gate = _authorize(src, "mongo:aggregate", level, collection, confirm)
+    gate = _authorize(src, conn, "aggregate", {"collection": collection, "pipeline": pipeline}, confirm)
     if gate:
         return gate
     docs = conn.aggregate(collection, pipeline)
     return {"source": src.name, "collection": collection, "returned": len(docs), "documents": docs}
+
+
+_MONGO_WRITE_OP = {"insert": "insert_one", "insert_many": "insert_many",
+                   "update": "update_one", "delete": "delete"}
 
 
 @mcp.tool()
@@ -300,7 +301,8 @@ def mongo_write(collection: str, operation: str, payload, source: str | None = N
     """写操作：insert / insert_many / update / delete。按 grant 分级 + 确认放行。"""
     src, conn = _target(source, "document")
     op = operation.lower()
-    gate = _authorize(src, f"mongo:{op}", levels.classify_mongo(op), collection, confirm)
+    canon = _MONGO_WRITE_OP.get(op, op)
+    gate = _authorize(src, conn, canon, {"collection": collection}, confirm)
     if gate:
         return gate
     try:

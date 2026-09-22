@@ -1,6 +1,24 @@
 # 读写分离与分级授权
 
-设计目标：agent 默认只能读；写按"库白/黑名单 + 操作分级 + 免确认等级"控制；超过免确认上限的操作，用一次性确认令牌放行（带操作意图）。策略只在 MCP 使用层（`mcp_server`）实施，连接器本身能力全开。
+设计目标：agent 默认只能读；写按"库白/黑名单 + 操作分级 + 免确认等级"控制；超过免确认上限的操作，用一次性确认令牌放行（带操作意图）。
+
+## 实现落点：根层统一一套流程
+
+分级授权的**流程在根层 `dbconnector`，所有模板共用一套**，不是每种方言各写各的：
+
+- `dbconnector/acl.py`：`Access`（权限对象）+ `decide(access, level, target)`（唯一决策：allow/deny/confirm）——与 MCP、与具体数据库都无关。
+- `BaseConnector.authorize(access, op, args)`：**统一管线 = `self.classify(op,args) → acl.decide(...)`**。所有连接器（含未来新方言）天然继承这套流程。
+- 各模板只实现 `classify(op, args) -> (level, target)`（"我这个操作算几级、打在哪个库/表/collection/key 上"），关系/键值/文档已各自实现；新增方言只要（多数情况）声明 `OP_LEVELS` 或覆写 `classify` 即可套用同一授权流程。
+- MCP 使用层（`mcp_server`）**只负责**：调 `connector.authorize()` 拿判定 + 对 `confirm` 结果签发/校验一次性令牌 + 拒绝时抛错。判定逻辑本身不在 MCP 层。
+
+```
+connector.authorize(access, op, args)
+      └─ classify(op,args) → (level, target)      # 模板实现：客观分级
+      └─ acl.decide(access, level, target)         # 根层唯一决策
+            → allow | confirm | deny
+```
+
+下方为策略细则。
 
 ## 操作风险分级（客观，`dbconnector/levels.py`）
 

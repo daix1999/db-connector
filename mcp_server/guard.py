@@ -135,36 +135,10 @@ def mongo_pipeline_read_only(pipeline: list) -> bool:
 
 
 # ======================================================================
-# 读写分离分级授权 + 一次性确认令牌（使用层策略）
+# 读写分离分级授权：决策已上移到根 dbconnector.acl（所有模板共用一套流程）
+# 本模块只保留"一次性确认令牌"（传输层关注）。
 # ======================================================================
-def _match_any(target: Optional[str], patterns: list[str]) -> bool:
-    if not patterns or target is None:
-        return False
-    t = str(target).lower()
-    return any(fnmatch.fnmatch(t, str(p).lower()) for p in patterns)
-
-
-def decide(access: "Access", level: int, target: Optional[str]) -> tuple[str, str]:
-    """返回 (verdict, reason)。verdict ∈ allow|confirm|deny。
-    allow_ceiling = min(grant_max, confirm_above)：免确认可达上限。
-    超过上限但 ≤ 破坏性 且 allow_escalation → confirm；否则 deny。管理员级恒拒。"""
-    if level == levels.READ:
-        return ("allow", "") if access.read else ("deny", "该源未授权读")
-    if level >= levels.ADMIN:
-        return ("deny", "管理员级操作(FLUSHALL/CONFIG/SHUTDOWN/dropDatabase…)永久拒绝")
-    # 写：黑名单优先，其次白名单（给了就仅允许其中目标）
-    if _match_any(target, access.write_deny):
-        return ("deny", f"目标 {target!r} 命中写黑名单")
-    if access.write_allow is not None and not _match_any(target, access.write_allow):
-        return ("deny", f"目标 {target!r} 不在写白名单 {access.write_allow}")
-    ceiling = min(access.grant_max, access.confirm_above)
-    if level <= ceiling:
-        return ("allow", "")
-    if level <= levels.DESTRUCTIVE and access.allow_escalation:
-        return ("confirm",
-                f"操作风险等级 {levels.level_name(level)} 超出该源免确认上限 "
-                f"{levels.level_name(ceiling)}，需显式确认")
-    return ("deny", f"操作等级 {levels.level_name(level)} 超出授权 {levels.level_name(ceiling)}")
+from dbconnector.acl import Access, decide, _match_any  # noqa: F401  re-export 兼容
 
 
 def _token_sig(source: str, op: str, level: int, target: Optional[str], exp: int) -> str:

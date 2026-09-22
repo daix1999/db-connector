@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 
 from dbconnector import ConnectorConfig, PoolConfig
 from dbconnector import levels
+from dbconnector.acl import Access
 
 _TRUE = {"1", "true", "yes", "y", "on"}
 
@@ -32,16 +33,6 @@ def _env(name: str, default: str | None = None) -> str | None:
 
 def _truthy(v, default: bool) -> bool:
     return default if v is None else str(v).lower() in _TRUE
-
-
-@dataclass
-class Access:
-    read: bool = True
-    grant_max: int = levels.READ          # 免确认可达的最高操作级
-    write_allow: list[str] | None = None  # None=不设白名单；给定=仅白名单目标可写
-    write_deny: list[str] = field(default_factory=list)
-    confirm_above: int = levels.ADMIN     # >该级需确认（默认 ADMIN 表示不额外要求）
-    allow_escalation: bool = False        # 是否允许用确认令牌越过 grant（上限=破坏性）
 
 
 @dataclass
@@ -72,21 +63,8 @@ class ServerSettings:
 def _parse_access(item: dict, g_allow: bool) -> Access:
     a = item.get("access")
     if isinstance(a, dict):
-        grant_max = levels.grant_max(a.get("grant", "read"))
-        confirm_above = a.get("confirm_above")
-        confirm_above = grant_max if confirm_above is None else levels.grant_max(confirm_above)
-        return Access(
-            read=_truthy(a.get("read"), True),
-            grant_max=grant_max,
-            write_allow=a.get("write_allow"),
-            write_deny=a.get("write_deny") or [],
-            confirm_above=confirm_above,
-            allow_escalation=_truthy(a.get("allow_escalation"), False),
-        )
-    # 兼容：allow_write
-    allow = _truthy(item.get("allow_write"), g_allow)
-    grant = levels.DESTRUCTIVE if allow else levels.READ
-    return Access(read=True, grant_max=grant, confirm_above=grant, allow_escalation=False)
+        return Access.from_dict(a)
+    return Access.from_legacy(_truthy(item.get("allow_write"), g_allow))
 
 
 def _global_defaults() -> tuple[bool, int]:

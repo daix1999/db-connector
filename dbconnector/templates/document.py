@@ -8,6 +8,7 @@ from __future__ import annotations
 from abc import abstractmethod
 from typing import Any
 
+from .. import levels
 from ..base import BaseConnector
 from ..result import Result
 
@@ -16,6 +17,19 @@ class DocumentConnector(BaseConnector):
     data_model = "document"
     AUDITED_OPS = ("find", "insert_one", "insert_many", "update_one", "delete",
                    "count", "aggregate", "list_sources", "describe_source", "get_source")
+    OP_LEVELS = {"find": levels.READ, "count": levels.READ, "count_documents": levels.READ,
+                 "list_collection_names": levels.READ, "list_sources": levels.READ,
+                 "describe_source": levels.READ, "get_source": levels.READ,
+                 "insert_one": levels.WRITE_DATA, "insert_many": levels.WRITE_DATA,
+                 "update_one": levels.WRITE_DATA, "update_many": levels.WRITE_DATA,
+                 "delete": levels.WRITE_DATA, "delete_many": levels.WRITE_DATA}
+
+    def classify(self, op: str, args: dict | None = None):
+        args = args or {}
+        target = args.get("collection") or args.get("target")
+        if op == "aggregate":
+            return levels.classify_mongo("aggregate", args.get("pipeline")), target
+        return self.OP_LEVELS.get(op, levels.WRITE_DATA), target
 
     # ---- 驱动原语（插件实现）----
     @abstractmethod

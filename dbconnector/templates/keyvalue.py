@@ -8,6 +8,7 @@ from __future__ import annotations
 from abc import abstractmethod
 from typing import Any
 
+from .. import levels
 from ..base import BaseConnector
 from ..result import Result
 
@@ -16,6 +17,23 @@ class KeyValueConnector(BaseConnector):
     data_model = "keyvalue"
     AUDITED_OPS = ("get", "set", "delete", "exists", "scan", "command",
                    "list_sources", "describe_source", "get_source")
+    OP_LEVELS = {"get": levels.READ, "exists": levels.READ, "scan": levels.READ,
+                 "type_of": levels.READ, "list_sources": levels.READ,
+                 "describe_source": levels.READ, "get_source": levels.READ,
+                 "set": levels.WRITE_DATA, "delete": levels.DESTRUCTIVE}
+
+    def classify(self, op: str, args: dict | None = None):
+        args = args or {}
+        if op == "command":
+            name = args.get("name", "")
+            cmd_args = args.get("args") or []
+            return levels.classify_redis(name), (cmd_args[0] if cmd_args else args.get("target"))
+        if op == "set":
+            return levels.WRITE_DATA, args.get("key")
+        if op == "delete":
+            keys = args.get("keys") or []
+            return levels.DESTRUCTIVE, (keys[0] if keys else args.get("target"))
+        return super().classify(op, args)
 
     # 唯一必须由插件实现的原语
     @abstractmethod

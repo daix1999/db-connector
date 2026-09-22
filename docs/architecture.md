@@ -18,6 +18,7 @@ db-connector 的目标是**给 agent 用的数据库连接器底座**——一�
   - `describe_source(name)` —— 某单元结构
   - `get_source(name, limit)` —— 取样
 - `data_model` 属性：所属族名（relational / keyvalue / document / columnar / search / graph / timeseries / vector）。
+- **统一分级授权** `authorize(access, op, args)` = `classify(op,args)`（模板实现，客观算级+目标）→ `acl.decide`（根层唯一决策）。所有模板共用这一套流程；连接器自身仍能力全开，`authorize` 只给判定不改变能力。
 - `__init_subclass__`：按类声明的 `AUDITED_OPS` 自动给这些方法套上审计包装（见"审计"文档），插件零埋点。
 
 ## 第二层 模板（`dbconnector/templates/`）
