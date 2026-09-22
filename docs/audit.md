@@ -9,6 +9,12 @@
 
 `ts, layer(mcp|connector), source/label, dialect, data_model, op, args(脱敏), outcome(ok|denied|confirm|error), dur_ms, detail(结果量), error`。
 
+## 操作决策记录（layer=decision，写操作无条件留痕）
+
+Agent 操作的"可追溯"不止是"执行了什么"，还包括"当时怎么判的"。因此每个**写操作（≥数据写级）**在授权点都额外落一条 `layer=decision` 记录，**无论最终放行/需确认/拒绝**：字段含 `op / target / level / decision(allow|confirm|deny) / why / grant / confirm_from`，SQL 还带 `read_only / where_present / multi_statement`，Redis 带 `command`，Mongo 带 `has_out_stage`。
+
+这样即使某次 UPDATE 被 grant 放行，日志里也明确记着"这是一条 WRITE_DATA 操作、在什么目标、依据什么规则放行"——AI 干了什么、系统怎么判的，一查便知。读操作不重复记（连接器层已记其执行）。`analyze` 工具/CLI 复用同一 `classify→decide`，与执行判定一致。
+
 ## 脱敏
 
 - 保留：SQL 文本（截断）、标识符（表名/collection/key）。

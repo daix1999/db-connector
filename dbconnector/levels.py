@@ -34,40 +34,42 @@ def grant_max(grant: str) -> int:
 
 
 _READ_HEADS = ("SELECT", "SHOW", "DESC", "DESCRIBE", "EXPLAIN", "WITH", "PRAGMA")
-
-# 关键词到级别（先匹配更"高"的破坏/管理词）
-_ADMIN_WORDS = {"GRANT", "REVOKE", "SHUTDOWN", "KILL", "SET", "RESET", "FLUSHALL"}
-_DESTRUCTIVE_WORDS = {"DROP", "TRUNCATE", "FLUSHDB"}
-_SCHEMA_WORDS = {"CREATE", "ALTER", "RENAME"}
-_DATA_WORDS = {"INSERT", "UPDATE", "DELETE", "REPLACE"}
+_ADMIN_HEADS = {"GRANT", "REVOKE", "SHUTDOWN", "KILL", "SET", "RESET", "CONFIG"}
+_DESTRUCTIVE_HEADS = {"DROP", "TRUNCATE", "RENAME", "FLUSHDB"}
+_SCHEMA_HEADS = {"CREATE", "ALTER"}
 
 _TABLE_RE = re.compile(
     r"\b(?:FROM|INTO|UPDATE|TABLE|JOIN)\s+[`\"]?([A-Za-z_][\w.]*)", re.I)
 
 
 def classify_sql(sql: str) -> int:
-    s = sql.strip().upper()
+    """按语句首关键词(去掉注释/前导括号)客观分级，避免 UPDATE...SET 里的 SET 被误判为 ADMIN。"""
+    s = sql.upper()
     s = re.sub(r"/\*.*?\*/", " ", s, flags=re.S)          # 去块注释
-    toks = set(re.findall(r"[A-Z_]+", s))
-    head = s.split(None, 1)[0] if s.split() else ""
-    if toks & _ADMIN_WORDS or head in _ADMIN_WORDS:
-        # SET 单独出现在最前视为配置；SELECT 里的别名 SET 不影响（head 判断已覆盖）
-        if head == "SELECT" or head in _READ_HEADS:
-            return READ
-        return ADMIN
-    if toks & _DESTRUCTIVE_WORDS:
-        return DESTRUCTIVE
-    if toks & _SCHEMA_WORDS:
-        return WRITE_SCHEMA
+    s = re.sub(r"--[^\n]*", " ", s)                        # 去行注释
+    s = s.strip().lstrip("(").strip()
+    words = s.split()
+    head = words[0] if words else ""
+    padded = f" {s} "
+
     if head in _READ_HEADS:
+        # SELECT ... INTO OUTFILE/DUMPFILE 属导出，视为管理级
+        if head == "SELECT" and (" INTO OUTFILE " in padded or " INTO DUMPFILE " in padded):
+            return ADMIN
         return READ
-    if head in _DATA_WORDS:
-        if head == "DELETE" and " WHERE " not in f" {s} ":
-            return DESTRUCTIVE          # 全表删除升为破坏性
-        if head == "UPDATE" and " WHERE " not in f" {s} ":
-            return DESTRUCTIVE          # 无约束全表更新升为破坏性
+    if head in _ADMIN_HEADS:
+        return ADMIN
+    if head in _DESTRUCTIVE_HEADS:
+        return DESTRUCTIVE
+    if head in _SCHEMA_HEADS:
+        return WRITE_SCHEMA
+    if head in ("INSERT", "REPLACE", "UPSERT"):
         return WRITE_DATA
-    return READ if head in _READ_HEADS else WRITE_DATA
+    if head == "UPDATE":
+        return WRITE_DATA if " WHERE " in padded else DESTRUCTIVE
+    if head == "DELETE":
+        return WRITE_DATA if " WHERE " in padded else DESTRUCTIVE
+    return WRITE_DATA if head else READ     # 未知语句按写处理（保守）
 
 
 def sql_targets(sql: str) -> list[str]:

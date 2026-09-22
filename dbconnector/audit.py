@@ -166,6 +166,19 @@ def log_operation(conn, op: str, args: dict, *, outcome="ok", dur_ms=0.0,
          outcome=outcome, dur_ms=dur_ms, detail=_result_detail(result), error=error)
 
 
+def record_decision(conn, brief: dict) -> None:
+    """记录一条"操作决策"审计：每次写操作无论放行/拒绝/需确认都留痕（agent 面）。
+    随 mcp 层开关（默认开）。不发确认令牌，纯记录分析结论。"""
+    lg = get_logger()
+    if lg is None or not _layer_enabled("mcp"):
+        return
+    ev = {"ts": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
+          "layer": "decision"}
+    ev.update({k: v for k, v in connector_identity(conn).items() if v is not None})
+    ev.update(brief)
+    lg.record(ev)
+
+
 def audited(tool_name: str, layer: str = "mcp", identity=None):
     """装饰器：MCP 工具用（layer=mcp）。identity 可为静态 dict 或 callable。"""
     def deco(fn):

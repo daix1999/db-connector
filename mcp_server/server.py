@@ -30,7 +30,8 @@ except Exception:  # pragma: no cover
         pass
 
 from dbconnector import create, dialect_info, levels  # noqa: E402
-from mcp_server import guard  # noqa: E402
+from dbconnector import audit as dbaudit  # noqa: E402
+from mcp_server import analyzer, guard  # noqa: E402
 from mcp_server.audit import audited  # noqa: E402
 from mcp_server.config import Source, ServerSettings, load_settings  # noqa: E402
 
@@ -93,12 +94,20 @@ def _target(source, family):
 
 
 def _authorize(src: Source, conn, op: str, args: dict, confirm: str | None):
-    """统一授权闸门：调用根层 conn.authorize()（所有模板同一流程），MCP 只加确认令牌。
-    返回 None=放行；dict=需确认（未执行）；抛 ToolError=拒绝。"""
+    """统一授权闸门：根层 conn.authorize()（所有模板同一流程），MCP 只加确认令牌。
+    返回 None=放行；dict=需确认（未执行）；抛 ToolError=拒绝。
+    写操作无论放行/需确认/拒绝，都记一条 op_decision 审计（agent 干了什么可追溯）。"""
+    level, target = conn.classify(op, args)
     verdict, reason, level = conn.authorize(src.access, op, args)
+
+    if level >= levels.WRITE_DATA:                       # 读操作不额外记（连接器层已记）
+        brief = analyzer.decision_brief(conn, src, op, args)
+        if confirm:
+            brief["confirmed"] = guard.verify_token(confirm, src.name, op, level, target)
+        dbaudit.record_decision(conn, brief)
+
     if verdict == "allow":
         return None
-    _, target = conn.classify(op, args)
     if verdict == "confirm":
         token, exp = guard.issue_token(src.name, op, level, target)
         if confirm and guard.verify_token(confirm, src.name, op, level, target):
@@ -182,6 +191,21 @@ def get_source(name: str, limit: int = 20, source: str | None = None) -> dict:
         raise ToolError(str(e))
     d["source"] = src.name
     return d
+
+
+# ---------- 操作决策分析（静态预演，与执行同源，不发令牌）----------
+@mcp.tool()
+@audited("analyze")
+def analyze(source: str | None = None, sql: str | None = None, command: str | None = None,
+            args: list | None = None, collection: str | None = None,
+            op: str | None = None, pipeline: list | None = None) -> dict:
+    """执行前预演一个操作会得到的决策：意图/风险级/授权判定(allow|confirm|deny)/预览/建议。
+    与真正执行同一套判定，可信；不连库、不签发确认令牌。sql/command/collection 三选一。"""
+    src = _resolve_source(source)
+    conn = _conn(src)
+    opn, argd = analyzer.normalize_input(source, sql=sql, command=command, cmd_args=args,
+                                          collection=collection, mongo_op=op, pipeline=pipeline)
+    return analyzer.build_card(conn, src, opn, argd)
 
 
 # ---------- relational 族（SQL）----------

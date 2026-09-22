@@ -49,7 +49,7 @@ from .templates import (
     VectorConnector,
 )
 
-__version__ = "2.3.0"
+__version__ = "2.4.0"
 __all__ = [
     "BaseConnector",
     "RelationalConnector", "ColumnarConnector", "KeyValueConnector", "DocumentConnector",
