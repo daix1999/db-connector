@@ -75,15 +75,20 @@ def _ts(r: dict) -> datetime | None:
         return None
 
 
+def scope_default(recs, layer):
+    """未显式指定 --layer 时默认只看 decision 写决策记录；没有则回退全部。"""
+    if layer:
+        return recs
+    dec = [r for r in recs if r.get("layer") == "decision"]
+    return dec or recs
+
+
 def apply_filters(recs, *, level=None, min_level=None, source=None, decision=None,
                   layer=None, since=None, op=None):
     out = []
     for r in recs:
         if layer and r.get("layer") != layer:
             continue
-        if not layer and r.get("layer") != "decision" and not (level or min_level):
-            # 不带层过滤且没要求风险级时，复盘聚焦决策记录，避免噪音
-            pass
         lv = _rec_level_int(r)
         if level is not None and lv != level:
             continue
@@ -110,7 +115,7 @@ def summarize(recs) -> str:
     by_source = collections.Counter(_rec_source(r) for r in dec if _rec_source(r))
     by_op = collections.Counter(r.get("op") for r in dec if r.get("op"))
 
-    lines = [f"共 {len(dec)} 条决策记录"]
+    lines = [f"共 {len(dec)} 条记录"]
     def _row(title, ctr, order=None):
         items = sorted(ctr.items(), key=lambda kv: (order.index(kv[0]) if order and kv[0] in order else 99, -kv[1]))
         lines.append(f"  按{title}: " + (" · ".join(f"{k} {v}" for k, v in items if k) or "—"))
@@ -241,7 +246,8 @@ def main() -> int:
     p.add_argument("--min-level", help="风险级下限（含）")
     p.add_argument("--source", help="按环境名过滤")
     p.add_argument("--decision", choices=["allow", "confirm", "deny", "ok", "error"])
-    p.add_argument("--layer", choices=["decision", "mcp", "connector"])
+    p.add_argument("--layer", choices=["decision", "mcp", "connector"],
+                   help="限定层；缺省时复盘默认只看 decision 写决策记录（更干净）")
     p.add_argument("--op", help="按操作名过滤，如 execute")
     p.add_argument("--since", help="ISO 时间下限，如 2026-09-22T00:00")
     p.add_argument("--limit", type=int, default=30, help="时间线条数（0=不显示）")
@@ -262,6 +268,7 @@ def main() -> int:
 
     flt = apply_filters(recs, level=level, min_level=min_level, source=a.source,
                         decision=a.decision, layer=a.layer, since=since, op=a.op)
+    flt = scope_default(flt, a.layer)      # 默认只看 decision 写决策记录
 
     if a.json:
         print(json.dumps(flt, ensure_ascii=False, indent=2))

@@ -29,6 +29,8 @@ python scripts/ops_review.py --min-level WRITE_DATA --html report.html   # 导�
 ```
 `--level` 精确、`--min-level` 下限，支持级名或数字 0–4；`--group-by` 选分组维度；`--html PATH` 导出带风险级配色、分组汇总与明细表的单文件报表。默认日志路径同 `DB_AUDIT_LOG`。
 
+> 默认作用域 = `decision` 写决策记录（未显式 `--layer` 时），复盘只看"agent 发起的写操作"，不被连接器层的读执行行淹没；要看某一层显式加 `--layer mcp|connector`。
+
 ## 脱敏
 
 - 保留：SQL 文本（截断）、标识符（表名/collection/key）。

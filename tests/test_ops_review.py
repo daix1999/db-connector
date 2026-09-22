@@ -78,6 +78,19 @@ def test_group_records():
     assert gs["prod"] == 2 and gs["sandbox"] == 2 and gs["cache"] == 2
 
 
+def test_default_scope_is_decision_first():
+    mixed = _mk(SAMPLE + [
+        {"layer": "connector", "ts": "2026-09-22T11:00:00", "label": "prod", "dialect": "mysql",
+         "op": "query", "outcome": "ok"},                       # 读执行行，无 level
+        {"layer": "mcp", "ts": "2026-09-22T11:00:01", "op": "health", "outcome": "ok"},
+    ])
+    recs = R.load(mixed)
+    assert len(R.scope_default(recs, None)) == len(SAMPLE)          # 默认只剩 6 条 decision
+    assert len(R.scope_default([r for r in recs if r["layer"] == "connector"], "connector")) == 1
+    # 只有非 decision 时回退全部
+    assert len(R.scope_default([{"layer": "connector"}], None)) == 1
+
+
 def test_to_html_report():
     recs = R.load(_mk(SAMPLE))
     doc = R.to_html(recs, title="复盘测试", meta="m", group_by="level")

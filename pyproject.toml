@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "db-connector"
-version = "2.6.0"
+version = "2.6.1"
 description = "面向 agent 的可插拔数据库连接器（两层抽象·多数据模型）：MySQL / Redis / MongoDB，含 stdio MCP server。"
 readme = "README.md"
 requires-python = ">=3.10"
