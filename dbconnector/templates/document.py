@@ -12,6 +12,9 @@ class DocumentConnector(BaseConnector):
 
     data_model = "document"
 
+    AUDITED_OPS = ("find", "insert_one", "insert_many", "update_one", "delete",
+                   "count", "aggregate", "list_sources", "describe_source", "get_source")
+
     @abstractmethod
     def find(self, collection: str, filter: dict | None = None, *,
              projection: dict | None = None, sort: list | None = None,

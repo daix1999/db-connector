@@ -10,6 +10,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
+from . import audit
 from .config import ConnectorConfig
 from .result import Result
 
@@ -23,6 +24,19 @@ class BaseConnector(ABC):
     data_model: str = ""
     #: 该方言默认端口，子类覆盖
     default_port: int | None = None
+    #: 需要自动审计的操作方法名（各模板声明；BaseConnector 在建类时统一包装）
+    AUDITED_OPS: tuple = ()
+
+    def __init_subclass__(cls, **kw):
+        """按 AUDITED_OPS 自动包装操作 → 无论经 MCP 还是直调库，落库操作都留痕。
+        已包装的方法跳过，避免叶子类重复包装。"""
+        super().__init_subclass__(**kw)
+        for name in getattr(cls, "AUDITED_OPS", ()):
+            fn = getattr(cls, name, None)
+            if fn is None or getattr(fn, "__isabstractmethod__", False):
+                continue  # 抽象桩不包，等具体实现所在类再包
+            if callable(fn) and not getattr(fn, "_audited", False):
+                setattr(cls, name, audit.wrap_operation(fn, name))
 
     def __init__(self, config: ConnectorConfig):
         if config.dialect != self.dialect:

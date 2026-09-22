@@ -66,6 +66,7 @@ def _build_source(item: dict, g_allow: bool, g_max: int) -> Source:
                    if k in ("mincached", "maxcached", "maxconnections")}
     cfg = ConnectorConfig(
         dialect=dialect,
+        label=item.get("name", dialect),
         host=item.get("host", "127.0.0.1"),
         port=int(port) if port else None,
         user=item.get("user"),

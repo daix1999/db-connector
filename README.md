@@ -136,19 +136,22 @@ with connect("mongodb", host="127.0.0.1", database="app") as m:
 
 ### 操作审计日志
 
-每一次工具调用都会落一条结构化 JSON Lines（`mcp_server/audit.py`），记录：时间、`tool`、目标 `source`、参数摘要、结果（`ok` / `denied` / `error`）、耗时 `dur_ms`，成功时附带结果量（`rowcount` / `affected_rows` / `returned`）。用途是"事后查得到 agent 到底做了什么、被拦在哪"。
+审计下沉到连接器（`dbconnector/audit.py`，库层），因此**无论走 MCP server 还是直接 `connect(...).query(...)`，落库操作都留痕**。MCP 层（`mcp_server/audit.py`）复用同一核心，额外记录"agent 意图 + 被护栏拦截的尝试"。两层共用一个 logger 实例（一把锁写同一个文件），并发下不串行交错。
 
-- 默认开启，写到 `<cwd>/logs/db-connector-audit.jsonl`（该目录已在 `.gitignore` 中，含 SQL 不入库）。
-- 默认脱敏：保留 SQL 文本与标识符，`params/payload/filter` 等含业务值的参数只记形状不记值；确需全量设 `DB_AUDIT_PARAMS=1`。
-- 绝不记录连接凭据；审计写失败不影响主调用（尽力而为）。
+- 连接器层：`BaseConnector.__init_subclass__` 按各模板声明的 `AUDITED_OPS` 自动包装操作，无需在方言里写埋点；identity 带 `dialect / data_model / label / host / database`。
+- MCP 层：每个工具经 `@audited` 记录，含被 guard 拒绝的调用（这类不会落到连接器层）。
+- 记录字段：`ts, layer(mcp|connector), source/label, dialect, op, args(脱敏), outcome(ok|denied|error), dur_ms, detail(结果量)`。
 
 | 环境变量 | 默认 | 说明 |
 |---|---|---|
-| `DB_AUDIT` | `on` | 设 `off/0/false` 关闭审计 |
-| `DB_AUDIT_LOG` | `logs/db-connector-audit.jsonl` | 审计文件路径 |
-| `DB_AUDIT_PARAMS` | 关 | `1` 时记录参数值（敏感） |
+| `DB_AUDIT` | `on` | 总开关，`off/0/false` 关闭 |
+| `DB_AUDIT_LAYER` | `all` | `all` \| `connector` \| `mcp` \| `off` 分层开关 |
+| `DB_AUDIT_LOG` | `logs/db-connector-audit.jsonl` | 路径；该目录已 `.gitignore`，含 SQL 不入库 |
+| `DB_AUDIT_PARAMS` | 关 | `1` 时记录参数值（敏感）；默认只记形状 |
 
-审计日志按天/大小轮转由部署侧处理（如需内置轮转可后续加）。
+脱敏：保留 SQL 文本与标识符，`params/payload/filter` 等含业务值的参数默认只记形状；绝不记录连接凭据；审计写失败不影响主调用。轮转由部署侧处理。
+
+已知边界：显式 `transaction()` 块内的单条语句暂不逐条审计（记录到"开启了一次事务"这一层）。
 
 运行须知（判断，非缺陷但需部署时考虑）：
 
@@ -209,4 +212,4 @@ python scripts/smoke_test.py --user root --password ... --database test   # 关�
 
 ## 9. 版本与许可
 
-版本 1.0.0 起为稳定基线；1.1.0 引入类型模板分层（`templates/`）、entry_points 插件发现、MCP 多源与面向 Agent 的自描述/安全增强；1.2.0 加入使用层操作审计日志（默认开启、脱敏）。均向后兼容。许可证：MIT。
+版本 1.0.0 起为稳定基线；1.1.0 引入类型模板分层（`templates/`）、entry_points 插件发现、MCP 多源与面向 Agent 的自描述/安全增强；1.2.0 加入使用层操作审计；1.3.0 将审计下沉到 BaseConnector，库直调与 MCP 双边界统一留痕。均向后兼容。许可证：MIT。

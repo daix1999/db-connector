@@ -12,6 +12,9 @@ class KeyValueConnector(BaseConnector):
 
     data_model = "keyvalue"
 
+    AUDITED_OPS = ("get", "set", "delete", "exists", "scan", "command",
+                   "list_sources", "describe_source", "get_source")
+
     @abstractmethod
     def get(self, key: str) -> Any: ...
 

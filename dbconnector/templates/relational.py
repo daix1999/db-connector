@@ -27,6 +27,9 @@ class RelationalConnector(BaseConnector):
     data_model = "relational"
     #: 方言占位符风格，供上层文档/转换参考
     placeholder = "%s"
+    #: 需自动审计的操作（fetch_one/fetch_value 会转成 query，不重复登记）
+    AUDITED_OPS = ("query", "execute", "execute_returning_id", "execute_many",
+                   "transaction", "list_sources", "describe_source", "get_source")
 
     def __init__(self, config: ConnectorConfig):
         super().__init__(config)

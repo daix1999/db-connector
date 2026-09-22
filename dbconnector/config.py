@@ -35,6 +35,8 @@ class ConnectorConfig:
     password: str | None = None
     database: str | None = None
     dsn: str | None = None
+    #: 审计/展示用的可读名（如 MCP 源名），可选
+    label: str | None = None
     pool: PoolConfig = field(default_factory=PoolConfig)
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -45,7 +47,7 @@ class ConnectorConfig:
     @classmethod
     def from_kwargs(cls, dialect: str, **kwargs: Any) -> "ConnectorConfig":
         """从关键字参数构建，未知参数落入 extra。"""
-        known = {"host", "port", "user", "password", "database", "dsn"}
+        known = {"host", "port", "user", "password", "database", "dsn", "label"}
         core = {k: kwargs.pop(k) for k in list(kwargs) if k in known}
         pool_kwargs = {k: kwargs.pop(k) for k in list(kwargs) if k in _POOL_FIELDS}
         extra_kwargs = kwargs  # 剩余全部透传
