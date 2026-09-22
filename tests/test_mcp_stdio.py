@@ -69,8 +69,8 @@ async def run(a):
             check("工具集完整(源发现+通用+SQL+Redis+Mongo)", expected <= tools, f"缺失 {expected - tools}")
 
             h = payload(await s.call_tool("health", {}))
-            check("health ok", h.get("ok") is True and h.get("allow_write") is False
-                  and h.get("family") == "relational")
+            check("health ok", h.get("ok") is True and h.get("family") == "relational"
+                  and h.get("access", {}).get("grant") == "READ")
 
             ls = payload(await s.call_tool("list_sources", {}))
             check("list_sources 含探测表", any(x["source_name"] == "_mcp_probe" for x in ls["rows"]))

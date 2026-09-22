@@ -29,7 +29,7 @@ except Exception:  # pragma: no cover
     class ToolError(Exception):  # type: ignore
         pass
 
-from dbconnector import create, dialect_info  # noqa: E402
+from dbconnector import create, dialect_info, levels  # noqa: E402
 from mcp_server import guard  # noqa: E402
 from mcp_server.audit import audited  # noqa: E402
 from mcp_server.config import Source, ServerSettings, load_settings  # noqa: E402
@@ -40,11 +40,10 @@ _conns: dict[str, object] = {}
 mcp = MCPServer(
     "db-connector",
     instructions=(
-        "数据库连接器（多源·多数据模型·只读优先）。推荐调用顺序："
-        "sources（看有哪些源/方言）→ list_sources(source) → describe_source(name,source) → "
-        "query/get_source。通用工具跨方言可用；query/execute 面向 relational 族，"
-        "redis_get/redis_scan/redis_command 面向 keyvalue 族，mongo_find/mongo_count/"
-        "mongo_aggregate/mongo_write 面向 document 族。写操作需该源 allow_write=true。"
+        "数据库连接器（多源·读写分离分级授权）。调用顺序：sources → list_sources(source) → "
+        "describe_source(name,source) → query/get_source。通用工具跨方言；query/execute 属 relational，"
+        "redis_* 属 keyvalue，mongo_* 属 document。读默认放行；写按源 grant 免确认等级放行，"
+        "超出的操作返回 requires_confirmation+confirm_token，带 confirm 参数二次调用才执行（管理员级恒拒）。"
     ),
 )
 
@@ -93,10 +92,30 @@ def _target(source, family):
     return src, _conn(src)
 
 
-def _allow_write(src: Source):
-    if not src.allow_write:
-        raise ToolError(f"源 '{src.name}' 为只读。确需写入：在其 DB_SOURCES 配置里设 "
-                        f"\"allow_write\": true 并重启该连接器。")
+def _authorize(src: Source, op: str, level: int, target, confirm: str | None):
+    """统一写/授权闸门。返回 None=放行执行；返回 dict=需确认（未执行）；抛 ToolError=拒绝。"""
+    verdict, reason = guard.decide(src.access, level, target)
+    if verdict == "allow":
+        return None
+    if verdict == "confirm":
+        token, exp = guard.issue_token(src.name, op, level, target)
+        if confirm and guard.verify_token(confirm, src.name, op, level, target):
+            return None   # 已确认 → 放行
+        return {
+            "requires_confirmation": True, "source": src.name, "op": op,
+            "risk_level": levels.level_name(level), "target": target,
+            "intent": reason, "confirm_token": token,
+            "expires_at_epoch": exp,
+            "next": f"确认该操作后，用相同参数再调一次并附 confirm=\"{token}\"",
+        }
+    raise ToolError(reason)   # deny
+
+
+def _access_view(src: Source) -> dict:
+    a = src.access
+    return {"read": a.read, "grant": levels.level_name(a.grant_max),
+            "write_allow": a.write_allow, "write_deny": a.write_deny,
+            "allow_escalation": a.allow_escalation}
 
 
 # ---------- 源发现 + 通用探查（跨方言）----------
@@ -105,7 +124,7 @@ def _allow_write(src: Source):
 def sources() -> dict:
     """列出已配置的源与全部可注册方言。agent 应首先调用本工具再决定 source。"""
     configured = [{"name": n, "dialect": s.config.dialect, "family": _family_of(s),
-                   "database": s.config.database, "allow_write": s.allow_write}
+                   "database": s.config.database, "access": _access_view(s)}
                   for n, s in settings().sources.items()]
     return {
         "configured_sources": configured,
@@ -118,10 +137,10 @@ def sources() -> dict:
 @mcp.tool()
 @audited("health")
 def health(source: str | None = None) -> dict:
-    """某源连通性与元信息（方言/族/是否可写）。"""
+    """某源连通性与元信息（方言/族/权限视图）。"""
     src = _resolve_source(source)
     hc = _conn(src).health_check()
-    hc.update({"source": src.name, "allow_write": src.allow_write, "family": _family_of(src)})
+    hc.update({"source": src.name, "family": _family_of(src), "access": _access_view(src)})
     hc["next"] = f"list_sources(source='{src.name}') 看该源有哪些数据"
     return hc
 
@@ -171,7 +190,10 @@ def query(sql: str, params: list | None = None, source: str | None = None) -> di
     """只读 SQL（SELECT/SHOW/DESC/EXPLAIN），自动补 LIMIT。目标源须是 relational 族。"""
     src, conn = _target(source, "relational")
     if not guard.is_read_only(sql):
-        raise ToolError("query 仅允许只读语句。需要写数据请用 execute（且该源需 allow_write=true）。")
+        raise ToolError("query 仅允许只读语句。需要写数据请用 execute（按该源 grant/确认放行）。")
+    gate = _authorize(src, "query", levels.READ, None, None)
+    if gate:
+        return gate
     final = guard.ensure_limit(sql, src.max_rows)
     try:
         res = conn.query(final, params or ())
@@ -183,14 +205,18 @@ def query(sql: str, params: list | None = None, source: str | None = None) -> di
 
 @mcp.tool()
 @audited("execute")
-def execute(sql: str, params: list | None = None, source: str | None = None) -> dict:
-    """写 SQL（INSERT/UPDATE/DELETE/DDL）。需该源 allow_write=true；禁止多语句拼接。"""
+def execute(sql: str, params: list | None = None, source: str | None = None,
+            confirm: str | None = None) -> dict:
+    """写 SQL（INSERT/UPDATE/DELETE/DDL）。按源 grant 分级放行；超阈值返回确认令牌，带 confirm 二次执行；禁止多语句。"""
     src, conn = _target(source, "relational")
-    _allow_write(src)
     if guard.has_multiple_statements(sql):
         raise ToolError("出于安全，execute 一次只允许一条语句，拒绝多语句拼接。")
     if guard.is_read_only(sql):
         raise ToolError("这是只读语句，请改用 query 工具。")
+    targets = levels.sql_targets(sql)
+    gate = _authorize(src, "execute", levels.classify_sql(sql), targets[0] if targets else None, confirm)
+    if gate:
+        return gate
     try:
         return {"source": src.name, "affected_rows": conn.execute(sql, params or ())}
     except Exception as e:
@@ -217,13 +243,15 @@ def redis_scan(match: str = "*", count: int = 100, source: str | None = None) ->
 
 @mcp.tool()
 @audited("redis_command")
-def redis_command(name: str, args: list | None = None, source: str | None = None) -> dict:
-    """任意 Redis 命令。只读源仅放行白名单命令；写命令需 allow_write；危险命令始终拒绝。"""
+def redis_command(name: str, args: list | None = None, source: str | None = None,
+                  confirm: str | None = None) -> dict:
+    """任意 Redis 命令。按 levels 分级 + 源 grant 放行；超阈值返回确认令牌；管理员级(FLUSHALL/CONFIG/SHUTDOWN…)恒拒。"""
     src, conn = _target(source, "keyvalue")
-    if not guard.redis_read_only_ok(name):
-        _allow_write(src)
-        if name.upper() in guard.REDIS_DANGEROUS:
-            raise ToolError(f"命令 {name} 属高危（清库/改配置/关服务），本连接器始终拒绝。")
+    level = levels.classify_redis(name)
+    target = args[0] if args else None
+    gate = _authorize(src, f"redis:{name}", level, target, confirm)
+    if gate:
+        return gate
     try:
         return {"source": src.name, "command": name, "result": conn.command(name, *(args or []))}
     except Exception as e:
@@ -253,22 +281,28 @@ def mongo_count(collection: str, filter: dict | None = None, source: str | None 
 
 @mcp.tool()
 @audited("mongo_aggregate")
-def mongo_aggregate(collection: str, pipeline: list, source: str | None = None) -> dict:
-    """聚合查询。含 $out/$merge 的写型管道需该源 allow_write=true。"""
+def mongo_aggregate(collection: str, pipeline: list, source: str | None = None,
+                    confirm: str | None = None) -> dict:
+    """聚合查询。含 $out/$merge 的写型管道按破坏性级处理（按 grant/确认放行）。"""
     src, conn = _target(source, "document")
-    if not guard.mongo_pipeline_read_only(pipeline):
-        _allow_write(src)
+    level = levels.classify_mongo("aggregate", pipeline)
+    gate = _authorize(src, "mongo:aggregate", level, collection, confirm)
+    if gate:
+        return gate
     docs = conn.aggregate(collection, pipeline)
     return {"source": src.name, "collection": collection, "returned": len(docs), "documents": docs}
 
 
 @mcp.tool()
 @audited("mongo_write")
-def mongo_write(collection: str, operation: str, payload, source: str | None = None) -> dict:
-    """写操作：insert / insert_many / update / delete。需该源 allow_write=true。"""
+def mongo_write(collection: str, operation: str, payload, source: str | None = None,
+                confirm: str | None = None) -> dict:
+    """写操作：insert / insert_many / update / delete。按 grant 分级 + 确认放行。"""
     src, conn = _target(source, "document")
-    _allow_write(src)
     op = operation.lower()
+    gate = _authorize(src, f"mongo:{op}", levels.classify_mongo(op), collection, confirm)
+    if gate:
+        return gate
     try:
         if op == "insert":
             return {"inserted_id": str(conn.insert_one(collection, payload))}

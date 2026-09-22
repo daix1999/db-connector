@@ -49,13 +49,13 @@ async def main():
             check(results, "redis", h.get("dialect") == "redis" and h.get("family") == "keyvalue")
             # 写命令在只读模式被拦（网络前）
             d = await s.call_tool("redis_command", {"name": "SET", "args": ["k", "v"]})
-            check(results, "redis", d.is_error and "只读" in d.content[0].text)
+            check(results, "redis", d.is_error and "超出" in d.content[0].text)
             # SQL 工具在 redis 方言被族守卫拦
             q = await s.call_tool("query", {"sql": "SELECT 1"})
             check(results, "redis", q.is_error and "relational" in q.content[0].text)
             # 只读命令可过守卫（之后可能因无服务失败，这里只断言"没被只读守卫拦"）
             g = await s.call_tool("redis_command", {"name": "GET", "args": ["k"]})
-            check(results, "redis", not (g.is_error and "只读" in g.content[0].text),
+            check(results, "redis", not (g.is_error and "超出" in g.content[0].text),
                   "GET 未被只读守卫误拦")
 
     # ---- Mongo 方言 ----
@@ -66,10 +66,10 @@ async def main():
             check(results, "mongo", h.get("dialect") == "mongodb" and h.get("family") == "document")
             d = await s.call_tool("mongo_write", {"collection": "c", "operation": "insert",
                                                    "payload": {"a": 1}})
-            check(results, "mongo", d.is_error and "只读" in d.content[0].text)
+            check(results, "mongo", d.is_error and "超出" in d.content[0].text)
             p = await s.call_tool("mongo_aggregate", {"collection": "c",
                                                       "pipeline": [{"$out": "x"}]})
-            check(results, "mongo", p.is_error and "只读" in p.content[0].text)
+            check(results, "mongo", p.is_error and "超出" in p.content[0].text)
             q = await s.call_tool("redis_get", {"key": "k"})
             check(results, "mongo", q.is_error and "keyvalue" in q.content[0].text)
 

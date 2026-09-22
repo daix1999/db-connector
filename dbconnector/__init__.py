@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from .base import BaseConnector
 from .config import ConnectorConfig, PoolConfig
+from . import levels
 from .exceptions import (
     ConfigError,
     ConnectionError_,
@@ -48,7 +49,7 @@ from .templates import (
     VectorConnector,
 )
 
-__version__ = "1.3.1"
+__version__ = "2.0.0"
 __all__ = [
     "BaseConnector",
     "RelationalConnector", "ColumnarConnector", "KeyValueConnector", "DocumentConnector",

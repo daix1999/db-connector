@@ -5,7 +5,23 @@
 """
 from __future__ import annotations
 
+import fnmatch
+import hashlib
+import hmac
+import os
 import re
+import secrets
+import time
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:  # 仅类型引用，避免循环导入
+    from mcp_server.config import Access
+
+from dbconnector import levels
+
+# 确认令牌密钥：优先 env，否则进程随机（重启即失效，一次性语义更强）
+_CONFIRM_SECRET = (os.getenv("DB_CONFIRM_SECRET") or secrets.token_hex(16)).encode()
+_CONFIRM_TTL = int(os.getenv("DB_CONFIRM_TTL", "300"))  # 秒
 
 # 允许的只读起始关键字
 _READ_ONLY_HEADS = {"SELECT", "WITH", "SHOW", "DESC", "DESCRIBE", "EXPLAIN"}
@@ -116,3 +132,60 @@ def mongo_pipeline_read_only(pipeline: list) -> bool:
         if isinstance(stage, dict) and any(k in stage for k in ("$out", "$merge")):
             return False
     return True
+
+
+# ======================================================================
+# 读写分离分级授权 + 一次性确认令牌（使用层策略）
+# ======================================================================
+def _match_any(target: Optional[str], patterns: list[str]) -> bool:
+    if not patterns or target is None:
+        return False
+    t = str(target).lower()
+    return any(fnmatch.fnmatch(t, str(p).lower()) for p in patterns)
+
+
+def decide(access: "Access", level: int, target: Optional[str]) -> tuple[str, str]:
+    """返回 (verdict, reason)。verdict ∈ allow|confirm|deny。
+    allow_ceiling = min(grant_max, confirm_above)：免确认可达上限。
+    超过上限但 ≤ 破坏性 且 allow_escalation → confirm；否则 deny。管理员级恒拒。"""
+    if level == levels.READ:
+        return ("allow", "") if access.read else ("deny", "该源未授权读")
+    if level >= levels.ADMIN:
+        return ("deny", "管理员级操作(FLUSHALL/CONFIG/SHUTDOWN/dropDatabase…)永久拒绝")
+    # 写：黑名单优先，其次白名单（给了就仅允许其中目标）
+    if _match_any(target, access.write_deny):
+        return ("deny", f"目标 {target!r} 命中写黑名单")
+    if access.write_allow is not None and not _match_any(target, access.write_allow):
+        return ("deny", f"目标 {target!r} 不在写白名单 {access.write_allow}")
+    ceiling = min(access.grant_max, access.confirm_above)
+    if level <= ceiling:
+        return ("allow", "")
+    if level <= levels.DESTRUCTIVE and access.allow_escalation:
+        return ("confirm",
+                f"操作风险等级 {levels.level_name(level)} 超出该源免确认上限 "
+                f"{levels.level_name(ceiling)}，需显式确认")
+    return ("deny", f"操作等级 {levels.level_name(level)} 超出授权 {levels.level_name(ceiling)}")
+
+
+def _token_sig(source: str, op: str, level: int, target: Optional[str], exp: int) -> str:
+    msg = f"{source}|{op}|{level}|{target or ''}|{exp}".encode()
+    return hmac.new(_CONFIRM_SECRET, msg, hashlib.sha256).hexdigest()
+
+
+def issue_token(source: str, op: str, level: int, target: Optional[str]) -> tuple[str, int]:
+    exp = int(time.time()) + _CONFIRM_TTL
+    return f"{exp}.{_token_sig(source, op, level, target, exp)}", exp
+
+
+def verify_token(token: Optional[str], source: str, op: str, level: int,
+                 target: Optional[str]) -> bool:
+    if not token or "." not in token:
+        return False
+    exp_s, sig = token.split(".", 1)
+    try:
+        exp = int(exp_s)
+    except ValueError:
+        return False
+    if exp < time.time():
+        return False
+    return hmac.compare_digest(sig, _token_sig(source, op, level, target, exp))
