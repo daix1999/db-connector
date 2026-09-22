@@ -15,6 +15,18 @@ Agent 操作的"可追溯"不止是"执行了什么"，还包括"当时怎么判
 
 这样即使某次 UPDATE 被 grant 放行，日志里也明确记着"这是一条 WRITE_DATA 操作、在什么目标、依据什么规则放行"——AI 干了什么、系统怎么判的，一查便知。读操作不重复记（连接器层已记其执行）。`analyze` 工具/CLI 复用同一 `classify→decide`，与执行判定一致。
 
+### 复盘 CLI
+
+`scripts/ops_review.py` 读审计 JSONL，按风险级/源/判定/层/时间过滤并聚合成时间线与概览：
+
+```bash
+python scripts/ops_review.py                              # 全量概览
+python scripts/ops_review.py --min-level WRITE_DATA       # 数据写及以上
+python scripts/ops_review.py --level DESTRUCTIVE --source mysql8-prod
+python scripts/ops_review.py --decision deny              # 只看被拒
+```
+`--level` 精确、`--min-level` 下限，支持级名或数字 0–4。默认日志路径同 `DB_AUDIT_LOG`。
+
 ## 脱敏
 
 - 保留：SQL 文本（截断）、标识符（表名/collection/key）。

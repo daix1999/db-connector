@@ -77,6 +77,7 @@ python tests/test_guard.py && python tests/test_guard_nosql.py
 python tests/test_acl.py                            # 根层分级授权(所有模板共用)
 python tests/test_analyzer.py                       # 操作决策分析(静态卡/放行写也记决策)
 python tests/test_config_profiles.py                # 权限档 profile/文件加载
+python tests/test_ops_review.py                     # 操作复盘(按风险级过滤/聚合)
 python tests/test_audit.py                            # 脱敏/成功/拒绝/事务逐条
 python tests/test_permissions.py --user root --password ...   # 分级授权+确认流(需容器)
 python tests/test_mcp_stdio.py --user root --password ...     # 关系型真实端到端
@@ -85,4 +86,4 @@ python scripts/smoke_test.py --user root --password ... --database test
 
 ## 版本与许可
 
-1.x 稳定线。2.0.0：模板收口、读写分离分级授权 + 一次性确认令牌、分层文档。2.1.0：分级授权流程下沉到根（`dbconnector/acl.py` + `BaseConnector.authorize`），所有模板共用同一套 classify→decide 管线。2.2.0：权限档 profile + 同一插件多环境各配权限（授权对象=连接 source，无角色）。2.2.1：权限档可外置到 access_profiles.json。2.3.0：权限收敛为两个旋钮 grant(硬上限)+confirm_from(确认起点)，去掉 allow_escalation/confirm_above(旧配置自动兼容映射)。2.4.0：新增操作决策分析（`analyze` 工具 + `scripts/ops_analyze.py`，静态预演、与执行同源）；写操作无条件落 `layer=decision` 审计（放行也记判了什么）；修复 `classify_sql` 把 `UPDATE…SET` 误判为 ADMIN 的 bug。向后兼容（`DBConnector` 别名、`nosql` 垫片、`allow_write` 映射）。许可证：MIT。
+1.x 稳定线。2.0.0：模板收口、读写分离分级授权 + 一次性确认令牌、分层文档。2.1.0：分级授权流程下沉到根（`dbconnector/acl.py` + `BaseConnector.authorize`），所有模板共用同一套 classify→decide 管线。2.2.0：权限档 profile + 同一插件多环境各配权限（授权对象=连接 source，无角色）。2.2.1：权限档可外置到 access_profiles.json。2.3.0：权限收敛为两个旋钮 grant(硬上限)+confirm_from(确认起点)，去掉 allow_escalation/confirm_above(旧配置自动兼容映射)。2.4.0：新增操作决策分析（`analyze` 工具 + `scripts/ops_analyze.py`，静态预演、与执行同源）；写操作无条件落 `layer=decision` 审计（放行也记判了什么）；修复 `classify_sql` 把 `UPDATE…SET` 误判为 ADMIN 的 bug。 2.5.0：新增操作复盘 CLI `scripts/ops_review.py`（按风险级/源/判定/时间过滤+聚合）。向后兼容（`DBConnector` 别名、`nosql` 垫片、`allow_write` 映射）。许可证：MIT。
