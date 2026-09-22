@@ -24,8 +24,10 @@ python scripts/ops_review.py                              # 全量概览
 python scripts/ops_review.py --min-level WRITE_DATA       # 数据写及以上
 python scripts/ops_review.py --level DESTRUCTIVE --source mysql8-prod
 python scripts/ops_review.py --decision deny              # 只看被拒
+python scripts/ops_review.py --group-by source           # 按环境分组（level|source|op|dialect|family|decision|layer）
+python scripts/ops_review.py --min-level WRITE_DATA --html report.html   # 导出自包含 HTML 报表
 ```
-`--level` 精确、`--min-level` 下限，支持级名或数字 0–4。默认日志路径同 `DB_AUDIT_LOG`。
+`--level` 精确、`--min-level` 下限，支持级名或数字 0–4；`--group-by` 选分组维度；`--html PATH` 导出带风险级配色、分组汇总与明细表的单文件报表。默认日志路径同 `DB_AUDIT_LOG`。
 
 ## 脱敏
 

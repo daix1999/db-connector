@@ -69,6 +69,27 @@ def test_summary_and_timeline_run():
     assert "sandbox" in t and "WRITE_DATA" in t
 
 
+def test_group_records():
+    recs = R.load(_mk(SAMPLE))
+    g = dict((name, (n, detail)) for name, n, detail in R.group_records(recs, "level"))
+    assert g["WRITE_DATA"][0] == 2 and g["DESTRUCTIVE"][0] == 2 and g["ADMIN"][0] == 1
+    assert g["WRITE_DATA"][1]["allow"] == 1 and g["WRITE_DATA"][1]["confirm"] == 1
+    gs = dict((n, tot) for n, tot, _ in R.group_records(recs, "source"))
+    assert gs["prod"] == 2 and gs["sandbox"] == 2 and gs["cache"] == 2
+
+
+def test_to_html_report():
+    recs = R.load(_mk(SAMPLE))
+    doc = R.to_html(recs, title="复盘测试", meta="m", group_by="level")
+    assert "<!doctype html>" in doc and "复盘测试" in doc
+    assert "DESTRUCTIVE" in doc and "WRITE_DATA" in doc
+    assert "prod" in doc and "execute" in doc
+    # HTML 转义：注入串不应破坏标签
+    doc2 = R.to_html([{"layer": "decision", "ts": "t", "label": "<script>", "op": "x",
+                       "target": "y", "level": "READ", "decision": "allow"}], group_by="level")
+    assert "<script>" not in doc2 and "&lt;script&gt;" in doc2
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for f in fns:

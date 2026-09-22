@@ -7,12 +7,14 @@
     python scripts/ops_review.py --min-level WRITE_DATA          # 只看数据写及以上
     python scripts/ops_review.py --level DESTRUCTIVE --source mysql8-prod
     python scripts/ops_review.py --decision deny                  # 只看被拒的
-    python scripts/ops_review.py --since 2026-09-22T00:00 --limit 50 --json
+    python scripts/ops_review.py --group-by source                # 按环境分组
+    python scripts/ops_review.py --min-level WRITE_DATA --html report.html   # 导出 HTML 报表
 """
 from __future__ import annotations
 
 import argparse
 import collections
+import html
 import json
 import os
 import sys
@@ -137,6 +139,101 @@ def timeline(recs, limit):
     return "\n".join(rows)
 
 
+_GROUPERS = {
+    "level": _lvl_name,
+    "decision": lambda r: r.get("decision") or r.get("outcome"),
+    "source": _rec_source,
+    "dialect": lambda r: r.get("dialect"),
+    "family": lambda r: r.get("data_model"),
+    "op": lambda r: r.get("op"),
+    "layer": lambda r: r.get("layer"),
+}
+GROUP_KEYS = list(_GROUPERS)
+_DEC_ORDER = ["allow", "confirm", "deny", "ok", "error", "denied"]
+
+
+def _dec_of(r):
+    return r.get("decision") or r.get("outcome") or "—"
+
+
+def group_records(recs, gk="level"):
+    """按 gk 分组，每组给总数 + 各判定细分。返回 [(组名, 总数, {判定:数})]，按总数降序。"""
+    fn = _GROUPERS.get(gk, _GROUPERS["level"])
+    groups = collections.defaultdict(collections.Counter)
+    for r in recs:
+        key = fn(r) or "—"
+        groups[key]["__total__"] += 1
+        groups[key][_dec_of(r)] += 1
+    ordered = sorted(groups.items(), key=lambda kv: -kv[1]["__total__"])
+    out = []
+    for name, ctr in ordered:
+        detail = {k: v for k, v in ctr.items() if k != "__total__"}
+        out.append((name, ctr["__total__"], detail))
+    return out
+
+
+def _pct(part, total):
+    return f"{part}/{total} ({round(part / total * 100)}%)" if total else "0"
+
+
+def to_html(recs, *, title="db-connector 操作复盘", meta="", group_by="level") -> str:
+    """生成自包含 HTML 报表：概览卡 + group_by 汇总表 + 明细表。"""
+    dec = [r for r in recs if r.get("layer") == "decision"] or recs
+    total = len(dec)
+    by_dec = collections.Counter(_dec_of(r) for r in dec)
+    by_lvl = collections.Counter(_lvl_name(r) for r in dec if _lvl_name(r))
+    lvl_badge = {"READ": "#2b6cb0", "WRITE_DATA": "#2f855a", "WRITE_SCHEMA": "#b7791f",
+                 "DESTRUCTIVE": "#c53030", "ADMIN": "#742a2a"}
+
+    cards = "".join(
+        f'<div class="card"><div class="n">{by_dec.get(d, 0)}</div><div class="l">{d}</div></div>'
+        for d in ["allow", "confirm", "deny"] if d in by_dec or True)
+    lvl_rows = "".join(
+        f'<tr><td><span class="b" style="background:{lvl_badge.get(k, "#555")}">{html.escape(str(k))}</span></td>'
+        f'<td>{v}</td><td>{_pct(v, total)}</td></tr>'
+        for k, v in sorted(by_lvl.items(), key=lambda kv: -_NAME2INT.get(kv[0], 9)))
+
+    gb_rows = ""
+    for name, n, detail in group_records(dec, group_by):
+        dd = " ".join(f'{k}:{v}' for k, v in sorted(detail.items(), key=lambda kv: _DEC_ORDER.index(kv[0]) if kv[0] in _DEC_ORDER else 99))
+        gb_rows += f"<tr><td>{html.escape(str(name))}</td><td>{n}</td><td>{html.escape(dd)}</td></tr>"
+
+    rows = "".join(
+        "<tr><td>{ts}</td><td>{src}</td><td>{dl}</td><td>{op}</td><td>{tgt}</td>"
+        "<td><span class=\"b\" style=\"background:{col}\">{lvl}</span></td><td>{dc}</td><td class=\"why\">{why}</td></tr>".format(
+            ts=html.escape((r.get("ts") or "")[:19]), src=html.escape(str(_rec_source(r) or "—")),
+            dl=html.escape(str(r.get("dialect") or "—")), op=html.escape(str(r.get("op") or "—")),
+            tgt=html.escape(str(r.get("target") or "—")),
+            col=lvl_badge.get(_lvl_name(r), "#555"), lvl=html.escape(str(_lvl_name(r) or "—")),
+            dc=html.escape(_dec_of(r)),
+            why=html.escape(str(r.get("why") or "")) +
+                (" ·无WHERE" if r.get("where_present") is False else "") +
+                (" ·多语句" if r.get("multi_statement") else ""))
+        for r in reversed(dec))
+
+    return f"""<!doctype html><html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{html.escape(title)}</title><style>
+body{{font:14px/1.5 -apple-system,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif;margin:0;background:#f6f7f9;color:#1a202c}}
+.wrap{{max-width:1080px;margin:24px auto;padding:0 16px}}
+h1{{font-size:20px;margin:0 0 4px}} .meta{{color:#718096;margin-bottom:16px}}
+.cards{{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px}}
+.card{{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:12px 18px;min-width:96px}}
+.card .n{{font-size:24px;font-weight:600}} .card .l{{color:#718096}}
+h2{{font-size:15px;margin:20px 0 8px;color:#2d3748}}
+table{{width:100%;border-collapse:collapse;background:#fff;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden}}
+th,td{{text-align:left;padding:8px 10px;border-bottom:1px solid #edf2f7}} th{{background:#f1f5f9;font-weight:600;color:#4a5568}}
+.b{{color:#fff;padding:1px 7px;border-radius:10px;font-size:12px}} .why{{color:#718096;font-size:12px}}
+</style></head><body><div class="wrap">
+<h1>{html.escape(title)}</h1><div class="meta">{html.escape(meta)}</div>
+<div class="cards">{cards}</div>
+<h2>按风险级（共 {total}）</h2><table><tr><th>风险级</th><th>数量</th><th>占比</th></tr>{lvl_rows}</table>
+<h2>按 {html.escape(group_by)} 分组</h2><table><tr><th>{html.escape(group_by)}</th><th>数量</th><th>判定细分</th></tr>{gb_rows}</table>
+<h2>明细（最近在前，共 {total}）</h2>
+<table><tr><th>时间</th><th>来源</th><th>方言</th><th>操作</th><th>目标</th><th>风险级</th><th>判定</th><th>说明</th></tr>{rows}</table>
+</div></body></html>"""
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="db-connector 操作复盘（支持按风险级过滤）")
     p.add_argument("--log", default=os.environ.get("DB_AUDIT_LOG") or os.path.join(ROOT, "logs", "db-connector-audit.jsonl"))
@@ -148,6 +245,9 @@ def main() -> int:
     p.add_argument("--op", help="按操作名过滤，如 execute")
     p.add_argument("--since", help="ISO 时间下限，如 2026-09-22T00:00")
     p.add_argument("--limit", type=int, default=30, help="时间线条数（0=不显示）")
+    p.add_argument("--group-by", choices=GROUP_KEYS, default="level", help="分组维度（概览/HTML 汇总）")
+    p.add_argument("--html", metavar="PATH", help="导出自包含 HTML 报表到该路径")
+    p.add_argument("--title", default="db-connector 操作复盘", help="HTML 报表标题")
     p.add_argument("--json", action="store_true", help="输出过滤后的原始记录 JSON")
     a = p.parse_args()
 
@@ -173,14 +273,31 @@ def main() -> int:
     if a.source: scope.append(f"source={a.source}")
     if a.decision: scope.append(f"decision={a.decision}")
     if a.layer: scope.append(f"layer={a.layer}")
-    head = f"复盘 {os.path.basename(a.log)}  记录 {len(flt)}/{len(recs)}"
-    if scope: head += "  过滤[" + " ".join(scope) + "]"
+    scope_s = ("  过滤[" + " ".join(scope) + "]") if scope else ""
+
+    if a.html:
+        meta = f"来源 {os.path.basename(a.log)} · 记录 {len(flt)}/{len(recs)}{(' · 过滤 ' + ' '.join(scope)) if scope else ''}"
+        doc = to_html(flt, title=a.title, meta=meta, group_by=a.group_by)
+        out = os.path.abspath(a.html)
+        with open(out, "w", encoding="utf-8") as f:
+            f.write(doc)
+        print(f"已生成 HTML 报表：{out}  （{len(flt)} 条）")
+        return 0
+
+    head = f"复盘 {os.path.basename(a.log)}  记录 {len(flt)}/{len(recs)}" + scope_s
     print(head)
     if not flt:
         print("（无匹配记录）"); return 0
     print(summarize(flt))
+    # 按 --group-by 维度分组（默认按风险级）
+    if a.group_by:
+        print(f"\n按 {a.group_by} 分组:")
+        for name, n, detail in group_records(flt, a.group_by):
+            dd = " ".join(f"{k}:{v}" for k, v in sorted(detail.items(),
+                        key=lambda kv: _DEC_ORDER.index(kv[0]) if kv[0] in _DEC_ORDER else 99))
+            print(f"  {str(name):<16} {n:>3}   {dd}")
     if a.limit:
-        print("时间线（最近）:")
+        print("\n时间线（最近）:")
         print(timeline(flt, a.limit))
     return 0
 
