@@ -4,7 +4,7 @@
 
 底层是两层抽象的 Python 库（连接器能力全开，读写皆支持），安全与权限全部收敛在使用层（MCP server）。
 
-> 详细文档见 `docs/`：[架构](docs/architecture.md) · [模板与插件](docs/templates-and-plugins.md) · [读写分离与分级授权](docs/permissions.md) · [操作审计](docs/audit.md)
+> 文档：[架构](docs/architecture.md) · [模板与插件](docs/templates-and-plugins.md) · [读写分离与分级授权](docs/permissions.md) · [操作审计](docs/audit.md) · [配置与环境变量](docs/configuration.md) · [FAQ / 排障](docs/faq.md) · [CHANGELOG](CHANGELOG.md)
 
 ## 一分钟理解
 
@@ -57,17 +57,41 @@ Redis / Mongo 同理：`connect("redis", ...)` / `connect("mongodb", ...)`。
 - 键值族：`redis_get / redis_scan / redis_command`
 - 文档族：`mongo_find / mongo_count / mongo_aggregate / mongo_write`
 
-配置示例（含每源 `access` 权限块）：
+配置示例（一个进程挂多环境，每个 `access` 引用权限档或内联；两旋钮 `grant`+`confirm_from`）：
 
 ```jsonc
+// DB_SOURCES
 [
-  {"name":"mysql","dialect":"mysql","host":"127.0.0.1","port":3306,"user":"root","password":"...","database":"test"},
-  {"name":"redis","dialect":"redis","host":"127.0.0.1","port":6379,"database":"0","access":{"grant":"read"}},
-  {"name":"mongo","dialect":"mongodb","host":"127.0.0.1","port":27017,"database":"app","access":{"grant":"read+data","allow_escalation":true}}
+  {"name":"mysql8-prod","dialect":"mysql","host":"127.0.0.1","port":3306,"user":"app","password":"...","database":"biz","access":{"grant":"read+destructive","confirm_from":"read+data","write_deny":["audit_log"]}},
+  {"name":"redis","dialect":"redis","host":"127.0.0.1","port":6379,"database":"0","access":"readonly"},
+  {"name":"mongo","dialect":"mongodb","host":"127.0.0.1","port":27017,"database":"app","access":"readonly"}
 ]
 ```
 
+常用环境变量（完整清单见 [docs/configuration.md](docs/configuration.md)）：
+
+| 变量 | 作用 |
+|---|---|
+| `DB_SOURCES` / `DB_ACCESS_PROFILE_FILE` / `DB_ACCESS_PROFILES` | 多源 / 权限档（文件优先加载、内联覆盖） |
+| `DB_DIALECT` / `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASSWORD` / `DB_DATABASE` / `DB_DSN` | 单方言兼容配置（老写法） |
+| `DB_ALLOW_WRITE` / `DB_MAX_ROWS` | 全局兜底：写权限 / 单次行数上限 |
+| `DB_AUDIT` / `DB_AUDIT_LAYER` / `DB_AUDIT_LOG` / `DB_AUDIT_PARAMS` | 审计：总开关 / 分层 / 路径 / 是否记参数值 |
+| `DB_CONFIRM_SECRET` / `DB_CONFIRM_TTL` | 确认令牌密钥 / 有效期(秒) |
+
 权限完整写法见 [docs/permissions.md](docs/permissions.md)，审计见 [docs/audit.md](docs/audit.md)。在 千问办公 / Claude / Cursor 注册：把 `mcp_config.example.json` 合并进 MCP 配置（千问办公不允许 agent 自动注册 stdio MCP，需手动粘贴）。
+
+## 命令行工具
+
+| 脚本 | 用途 |
+|---|---|
+| `scripts/ops_analyze.py` | 操作决策预演（静态：风险级/授权判定/预览/建议），与执行同源、不连库、不发令牌 |
+| `scripts/ops_review.py` | 复盘审计日志（`--level/--min-level/--source/--decision/--group-by/--html`） |
+| `scripts/smoke_test.py` | 关系型建库 + 全链路冒烟 |
+
+```bash
+python scripts/ops_analyze.py --source mysql8-prod --sql "UPDATE t SET x=1"     # 预演这条会怎么判
+python scripts/ops_review.py --min-level WRITE_DATA --html report.html          # 复盘写操作并导出报表
+```
 
 ## 测试
 
@@ -86,4 +110,11 @@ python scripts/smoke_test.py --user root --password ... --database test
 
 ## 版本与许可
 
-1.x 稳定线。2.0.0：模板收口、读写分离分级授权 + 一次性确认令牌、分层文档。2.1.0：分级授权流程下沉到根（`dbconnector/acl.py` + `BaseConnector.authorize`），所有模板共用同一套 classify→decide 管线。2.2.0：权限档 profile + 同一插件多环境各配权限（授权对象=连接 source，无角色）。2.2.1：权限档可外置到 access_profiles.json。2.3.0：权限收敛为两个旋钮 grant(硬上限)+confirm_from(确认起点)，去掉 allow_escalation/confirm_above(旧配置自动兼容映射)。2.4.0：新增操作决策分析（`analyze` 工具 + `scripts/ops_analyze.py`，静态预演、与执行同源）；写操作无条件落 `layer=decision` 审计（放行也记判了什么）；修复 `classify_sql` 把 `UPDATE…SET` 误判为 ADMIN 的 bug。 2.5.0：新增操作复盘 CLI ops_review.py。2.6.0：复盘工具加 --group-by 与 --html 报表。2.6.1：复盘默认作用域收敛为 decision 写决策记录。向后兼容（`DBConnector` 别名、`nosql` 垫片、`allow_write` 映射）。许可证：MIT。
+当前版本见 `dbconnector.__version__`；完整变更记录见 [CHANGELOG.md](CHANGELOG.md)。1.x/2.x 均向后兼容（`DBConnector` 别名、`nosql` 垫片、`allow_write` 映射、`allow_escalation/confirm_above` 旧配置自动翻译）。许可证：MIT。
+
+## 常见问题（节选）
+
+- **写被拒/被要求确认？** 看该环境 `access`：`level>grant` 拒绝，`confirm_from≤level≤grant` 需确认令牌。`analyze` 可预演。
+- **agent 干的活怎么查？** `logs/db-connector-audit.jsonl`，用 `ops_review.py` 复盘（默认只看写决策）。
+- **放行没被改配的写也记吗？** 记。每条写都落 `layer=decision`（见 [docs/audit.md](docs/audit.md)）。
+- 更多见 [docs/faq.md](docs/faq.md)。

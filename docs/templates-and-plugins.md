@@ -58,11 +58,18 @@ class PostgresConnector(RelationalConnector):
 clickhouse = "my_dbconnector_clickhouse"   # 模块内 import 时执行 @register("clickhouse")
 ```
 
-`dbconnector.registry` 首次使用时加载 `dbconnector.dialects` 组，`available_dialects()` 与 MCP 的 `sources` 会自动列出。
+安装后，`available_dialects()` 与 MCP 的 `sources` 会自动列出该方言，通用工具即刻可用。
 
-## 审计自动接入
+## 新插件自动继承的能力（无需写埋点/权限代码）
 
-子类声明 `AUDITED_OPS` 里的方法会被 `BaseConnector.__init_subclass__` 自动包装、逐次落审计——插件无需写任何埋点代码。若覆盖了某个已登记方法（如 `describe_source`），覆盖版也会被自动包装。
+继承某个模板 + `@register` 后，下面这些**开箱即用**，且新方言自动适用：
+
+- **审计**：`AUDITED_OPS` 里的方法被 `BaseConnector.__init_subclass__` 自动包装、逐次落 connector 层审计（含事务块内逐条）。覆盖某已登记方法（如 `describe_source`）也会被自动包装。
+- **分级授权 / 确认**：`BaseConnector.authorize = classify → acl.decide`。新方言多数只需声明 `OP_LEVELS`（方法→风险级）；若某操作级别取决于内容（如按 SQL/命令动态判），覆写 `classify(op,args)->(level,target)`。写超 `grant` 拒绝、`[confirm_from,grant]` 走一次性令牌，全部免费继承。
+- **决策审计**：≥数据写级的操作在授权点自动落 `layer=decision` 记录（放行也记），无需额外代码。
+- **通用探查 / 决策预演 / 复盘 / 多源路由**：`analyze`、`ops_review`、`sources/health/...`、`source` 参数全部自动覆盖新方言。
+
+关系型模板已内置 `classify`（按 SQL 首关键词分级）；键值/文档模板同理。所以接入一个新库，通常**只写连接 + 原语 + 一句 `OP_LEVELS`**，权限与可追溯性即到位。
 
 ## 占位符与方言差异
 
