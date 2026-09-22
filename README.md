@@ -1,209 +1,196 @@
-# db-connector · 可插拔本地数据库连接器（Python · 多方言）
+# db-connector
 
-一个**两层抽象**的数据库连接器库：
-- **第一层 `BaseConnector`**：所有后端共同满足的极简契约（生命周期 + `list_sources / describe_source / get_source / health`）。
-- **第二层按数据模型分族**：`RelationalConnector`（SQL，旧名 `DBConnector` 兼容）· `KeyValueConnector`（Redis）· `DocumentConnector`（Mongo）。
+面向 AI Agent 的可插拔数据库连接器，以 stdio MCP server 的形式对外提供能力。项目的评判标准不是"人写代码是否方便"，而是"Agent 调用是否顺手"：接口自描述、跨方言统一、结果结构化、失败信息可据以决定下一步动作。
 
-内置三种方言：**MySQL、Redis、MongoDB**；新增 Postgres/SQLServer 只要继承 `RelationalConnector` 写一个子类并 `@register`，调用方零改动。
+底层是一个两层抽象的 Python 库（连接器能力完整，读写皆支持）；权限与安全裁剪全部收敛在使用层（MCP server 的 guard），因此同一套连接器既能给 Agent 安全地只读使用，也能在显式授权下承担写操作。
 
-> 设计取向（按头儿要求）：**连接器本身能力全开**（读写/危险命令都提供），**只读限制只在"使用层"（MCP guard）按运行时开关裁剪**——不把权限写死进连接器。
+## 1. 架构
 
-内置能力：连接池/连接管理 · 参数化查询 · 批量 · 事务 · 通用探查 · 健康检查 · 上下文管理。
-
-## 目录结构
+分三层。加一种数据库，就是"选一个模板、写一个方言插件"，不改动底座。
 
 ```
-db-connector/
-├── dbconnector/
-│   ├── __init__.py          # 对外 API：connect / create / register / available_dialects ...
-│   ├── base.py              # 第一层 BaseConnector + 第二层 RelationalConnector(=DBConnector)
-│   ├── nosql.py             # 第二层 KeyValueConnector / DocumentConnector 中间基类
-│   ├── config.py            # ConnectorConfig / PoolConfig，支持 kwargs 与环境变量
-│   ├── registry.py          # 方言注册表 + 工厂（可插拔核心）
-│   ├── result.py            # Result(通用) + ResultSet(关系型兼容)
-│   ├── exceptions.py        # 统一异常层级
-│   └── connectors/
-│       ├── mysql.py         # MySQLConnector   → RelationalConnector
-│       ├── redis.py         # RedisConnector  → KeyValueConnector
-│       └── mongodb.py       # MongoConnector  → DocumentConnector
-├── mcp_server/              # 把连接器包装成多方言 stdio MCP server
-├── scripts/smoke_test.py    # test 库引导 + 关系型端到端冒烟
-├── examples/demo.py         # 使用示例
-├── tests/                   # 离线单测 + 关系型 stdio + 多方言护栏 stdio
-├── requirements.txt
-└── .env.example
+dbconnector/
+  base.py            第一层  BaseConnector    —— 跨方言统一契约：生命周期 + list_sources/describe_source/get_source
+  templates/         第二层  类型模板          —— 按数据模型定义操作面
+    relational.py        RelationalConnector（SQL：池/查询/批量/事务）
+    columnar.py          ColumnarConnector （OLAP：扫描护栏、分区、代价估算）
+    keyvalue.py          KeyValueConnector
+    document.py          DocumentConnector
+    search.py            SearchConnector
+    graph.py             GraphConnector
+    timeseries.py        TimeSeriesConnector
+    vector.py            VectorConnector
+  connectors/        第三层  方言插件          —— 继承模板实现具体数据库
+    mysql.py  redis.py  mongodb.py
+  registry.py        注册表 + 工厂 + 插件发现（内置 import + pip entry_points）
+  config.py  result.py  exceptions.py
+mcp_server/          面向 Agent 的 stdio MCP server + 安全护栏
 ```
 
-## 安装依赖
+设计要点：
+
+- 第一层的探查方法（列数据单元、看结构、取样）对所有数据模型统一。Agent 用 `list_sources / describe_source / get_source` 就能摸清任意库，无需为每种数据库学一套新 API。
+- 第二层把"同一种数据模型"的操作面固定下来。SQL 类库共享连接池、参数化查询、事务；换方言只需提供驱动与连接参数。
+- 第三层是插件。内置插件放在 `connectors/` 并在包导入时注册；外部插件可通过 Python entry_points 组 `dbconnector.dialects` 注入，底座代码不变。
+- 向后兼容：`DBConnector` 是 `RelationalConnector` 的别名；`dbconnector.nosql` 保留为转发垫片。
+
+## 2. 支持的数据模型与数据库
+
+模板为契约，方言为实现。当前已实现并实测的关系型/键值/文档三种可直接使用；其余模板给出统一操作面，按同一"选模板 + 写方言"路径接入即可。
+
+| 数据模型 | 类型模板 | 查询/交互语言 | 已实现方言 | 可接入的代表库 |
+|---|---|---|---|---|
+| 关系 | RelationalConnector | SQL（各家方言） | MySQL/MariaDB | PostgreSQL, SQL Server, Oracle, SQLite, TiDB |
+| 列式/OLAP | ColumnarConnector | SQL（分析向） | —（模板） | ClickHouse, Doris, StarRocks, Druid, Greenplum |
+| 键值 | KeyValueConnector | Redis RESP 命令 | Redis | Memcached, etcd |
+| 文档 | DocumentConnector | 查询文档 / 聚合管道 | MongoDB | CouchDB, DynamoDB |
+| 检索 | SearchConnector | 查询串 / DSL | —（模板） | Elasticsearch, OpenSearch, Solr |
+| 图 | GraphConnector | Cypher / GQL / Gremlin | —（模板） | Neo4j, NebulaGraph, JanusGraph, Neptune |
+| 时序 | TimeSeriesConnector | 行协议 / FLUX / SQL | —（模板） | InfluxDB, QuestDB, TimescaleDB, TDengine |
+| 向量 | VectorConnector | 向量检索 API | —（模板） | Milvus, Qdrant, Weaviate, Chroma, pgvector |
+
+不同数据模型的连接层差异被模板吸收：关系型统一走 DB-API 2.0 + 连接池；Redis、Mongo 用各自驱动自带的连接池，不套 DB-API；向量/检索/图/时序以"集合/索引/标签/measurement"映射到统一的 `list_sources/describe_source/get_source`。
+
+## 3. 安装
 
 ```bash
-pip install -r requirements.txt      # PyMySQL + DBUtils
+pip install -r requirements.txt          # 关系型 + MCP
+pip install ".[redis,mongo,mcp]"         # 按需装可选方言
 ```
 
-## 快速开始
+依赖：Python ≥ 3.10；`PyMySQL`、`DBUtils`（关系型核心）；`redis`、`pymongo`（NoSQL，可选）；`mcp ≥ 2.0`（server）。
+
+## 4. 作为库使用
 
 ```python
 from dbconnector import connect
 
-with connect("mysql", host="127.0.0.1", port=3306,
-             user="root", password="你的密码", database="test") as db:
-
-    # 查询（参数化，防注入；MySQL 用 %s 占位符）
-    res = db.query("SELECT id, name FROM users WHERE score >= %s", (60,))
-    print(res.columns)        # ['id', 'name']
-    print(res.to_list())      # [{'id':1,'name':'alice'}, ...]
-    print(res.scalar)         # 第一行第一列
-
-    # 单条 DML -> 受影响行数；INSERT 想要自增主键用下面这个
-    new_id = db.execute_returning_id(
-        "INSERT INTO users(name, score) VALUES (%s, %s)", ("bob", 70))
-
-    # 批量
-    db.execute_many("INSERT INTO users(name, score) VALUES (%s, %s)",
-                    [("c", 80), ("d", 90)])
-
-    # 事务：正常结束提交，抛异常自动回滚
-    with db.transaction() as tx:
-        tx.execute("UPDATE users SET score=%s WHERE id=%s", (99, new_id))
-        tx.execute("INSERT INTO audit(msg) VALUES (%s)", ("bumped",))
+with connect("mysql", host="127.0.0.1", user="root", password="...", database="test") as db:
+    rows = db.query("SELECT * FROM users WHERE id > %s", (0,)).to_list()
+    db.execute("UPDATE users SET name=%s WHERE id=%s", ("bob", 1))
+    with db.transaction() as tx:                 # 正常提交，异常回滚
+        tx.execute("INSERT INTO audit(msg) VALUES (%s)", ("edited",))
 ```
-
-从环境变量读配置（对应 `.env.example`）：
 
 ```python
-from dbconnector import ConnectorConfig, create
-db = create(ConnectorConfig.from_env("mysql", prefix="DB_"))
+with connect("redis", host="127.0.0.1", database=0) as r:
+    r.set("k", "v", ttl=60); r.scan(match="k*")
+
+with connect("mongodb", host="127.0.0.1", database="app") as m:
+    m.insert_one("orders", {"sku": "X1", "qty": 2}); m.find("orders", {"qty": {"$gt": 1}})
 ```
 
-## 跑冒烟测试（准备 test 库 + 全链路验证）
+## 5. MCP Server（Agent 入口）
 
-脚本会先 `CREATE DATABASE IF NOT EXISTS`，建临时表，逐项验证 CRUD / 批量 / 事务回滚 / 事务提交，
-默认测完自动 `DROP` 临时表（加 `--keep` 可保留）。
+一个进程可同时挂载多个数据源（不同方言并存），通过环境变量 `DB_SOURCES`（JSON 数组）配置；也兼容旧的单方言 `DB_DIALECT/DB_HOST/...`。每个工具带可选 `source` 参数定位到某个源，只有一个源时可省略。族专属工具会校验目标源的方言族，不匹配则返回可操作的错误。
 
-```bash
-python scripts/smoke_test.py --user root --password "你的MySQL密码" --database test
+### 推荐的 Agent 调用顺序
+
+1. `sources` — 看有哪些源、每个源属于哪个族，以及系统已注册的方言清单。
+2. `list_sources(source)` — 列出该源的数据单元（表/集合/key）。
+3. `describe_source(name, source)` — 看结构（字段/索引/类型）。
+4. 取数：通用用 `get_source`；关系型用 `query`；键值用 `redis_*`；文档用 `mongo_*`。
+
+多个工具的返回里带 `next`/`hint` 字段，提示下一步该调什么，减少 Agent 的探索成本。
+
+### 工具清单
+
+| 工具 | 适用族 | 说明 |
+|---|---|---|
+| `sources` | 通用 | 已配置源 + 注册方言目录 |
+| `health(source)` | 通用 | 连通性、方言、族、是否可写 |
+| `list_sources(source)` | 通用 | 列数据单元 |
+| `describe_source(name,source)` | 通用 | 数据结构 |
+| `get_source(name,limit,source)` | 通用 | 取样，免写查询 |
+| `query(sql,source)` | relational | 只读 SQL，自动补 LIMIT |
+| `execute(sql,source)` | relational | 写 SQL，需该源 `allow_write=true` |
+| `redis_get / redis_scan / redis_command(name,args,source)` | keyvalue | 读、扫描、任意命令（受护栏约束） |
+| `mongo_find / mongo_count / mongo_aggregate / mongo_write(source)` | document | 查询、计数、聚合、写入 |
+
+新增方言插件后，通用工具（`sources/health/list_sources/describe_source/get_source`）自动对它可用，无需为本文件增改代码；只有该族特有的动作才需要新增对应工具。
+
+### 配置
+
+```jsonc
+// DB_SOURCES（作为环境变量传的是 JSON 字符串）
+[
+  {"name":"mysql","dialect":"mysql","host":"127.0.0.1","port":3306,"user":"root","password":"...","database":"test","allow_write":false},
+  {"name":"redis","dialect":"redis","host":"127.0.0.1","port":6379,"database":"0"},
+  {"name":"mongo","dialect":"mongodb","host":"127.0.0.1","port":27017,"database":"app"}
+]
 ```
 
-也可用环境变量：`set DB_PASSWORD=... && python scripts/smoke_test.py`
+`allow_write`、`max_rows` 可按源单独设置；全局默认用 `DB_ALLOW_WRITE`、`DB_MAX_ROWS`。连接串复杂的库（如 MongoDB 带鉴权源）用 `dsn` 字段。
 
-离线单元测试（不需要数据库）：
+## 6. 安全模型
 
-```bash
-python tests/test_offline.py     # 或 pytest -q
-```
+核心原则：连接器能力完整、不做权限判断；安全在使用层实施。这样既能给 Agent 一个安全的只读入口，也能在显式授权下放开写。
 
-## API 速查
+已实施的护栏（`mcp_server/guard.py`）：
 
-| 方法 | 作用 | 返回 |
-|------|------|------|
-| `query(sql, params)` | SELECT | `ResultSet` |
-| `fetch_one(sql, params)` | 取一行 | `dict \| None` |
-| `fetch_value(sql, params)` | 取一个标量 | `Any` |
-| `execute(sql, params)` | 单条 DML | 受影响行数 `int` |
-| `execute_returning_id(...)` | INSERT 取自增主键 | `int \| None` |
-| `execute_many(sql, seq)` | 批量 DML | 累计行数 `int` |
-| `transaction()` | 事务上下文 | `tx.execute/query/executemany` |
-| `ping()` / `health_check()` | 连通性 / 健康信息 | `bool` / `dict` |
+- 只读模式：`query` 仅放行 SELECT/SHOW/DESC/EXPLAIN；识别并拒绝多语句拼接、`INTO OUTFILE`、`SET` 等；SELECT 无 LIMIT 时按 `max_rows` 自动补，限制回传体量。
+- 写操作：`execute` 及 Redis/Mongo 写工具要求对应源 `allow_write=true`；关系型 `execute` 拒绝一次多条语句。
+- Redis：只读命令白名单；`FLUSHALL / FLUSHDB / CONFIG / SHUTDOWN / DEBUG / KEYS / RENAME` 等即便在写模式下也始终拒绝（`KEYS` 排除在大库上会阻塞服务，改用 `SCAN`）。
+- Mongo：聚合管道含 `$out/$merge` 视为写；`mongo_write` 仅接受显式白名单操作。
+- 标识符：表名等走字符白名单，避免拼进元数据查询造成注入；参数一律走驱动的参数化。
 
-## 作为 MCP Server 让 agent 直接调用
+运行须知（判断，非缺陷但需部署时考虑）：
 
-`mcp_server/` 把连接器包装成标准 **stdio MCP server**，**一个进程可同时集成多个数据源**（MySQL + Redis + MongoDB…），由 env `DB_SOURCES`（JSON 数组）配置；**默认只读**（写需该源 `allow_write=true`）。也保留旧单方言用法（只给 `DB_DIALECT/DB_HOST/...`）。每个工具带可选 `source` 参数定位到某个源，只有一个源时可省略；族专属工具会校验目标源的方言族，不匹配清晰报错。
+- 凭据以环境变量注入到连接器进程，属明文。仅在本机或受信主机使用；不要把 `DB_SOURCES` 提交进版本库（`.gitignore` 已排除 `.env`）。
+- 驱动默认明文连接本机。若连远程实例，请在对应源 `extra` 里开启 TLS（PyMySQL `ssl_ca`、Redis `ssl=True`、pymongo `tls=True`）。
+- Redis 写路径的命令名需匹配驱动方法（如删除用 `DEL` 在部分驱动下不等价 `delete`）；如需稳定批量写，建议为该族补专用写工具而非直接透传。
+- 本工具不内置操作审计日志；需要留痕时，在网关或数据库侧审计。
 
-工具三类：
+## 7. 扩展：接入一种新数据库
 
-**源发现 + 通用（跨方言）**
-| 工具 | 作用 |
-|------|------|
-| `sources` | 列出所有源：名称/方言/族/是否可写 |
-| `health(source)` | 某源连通性 / 族 / 是否放开写 |
-| `list_sources(source)` | 列数据（表 / 集合 / key 概览） |
-| `describe_source(name, source)` | 结构（字段 / 索引 / key+TTL） |
-| `get_source(name, limit, source)` | 样本 |
-
-**族专属（按目标源的方言族校验）**
-| 方言族 | 工具 | 只读? |
-|------|------|:---:|
-| 关系型 | `query(sql,source)` / `execute(sql,source)` | query 只读，execute 需该源放开写 |
-| Redis | `redis_get` / `redis_scan` / `redis_command(name,args,source)` | command 只读放行白名单，写/危险命令受控 |
-| Mongo | `mongo_find` / `mongo_count` / `mongo_aggregate` / `mongo_write(source)` | 前三个只读；mongo_write 及含 `$out/$merge` 的管道需放开写 |
-
-**安全护栏**（`mcp_server/guard.py`，已离线单测覆盖）：SQL 只读白名单 + 多语句/`INTO OUTFILE` 拦截 + 表名正则；Redis 只读命令白名单 + 危险命令(FLUSHALL/CONFIG/SHUTDOWN…)始终拒绝；Mongo 只读操作判定 + 写型管道识别。越权统一返回规范 `ToolError`。
-
-**多源配置**（推荐，env `DB_SOURCES` 传 JSON 字符串）：
-```json
-[{"name":"mysql","dialect":"mysql","host":"127.0.0.1","port":3306,"user":"root","password":"...","database":"test"},
- {"name":"redis","dialect":"redis","host":"127.0.0.1","port":6379,"database":"0"},
- {"name":"mongo","dialect":"mongodb","host":"127.0.0.1","port":27017,"database":"app"}]
-```
-`allow_write`/`max_rows` 可按源单独设；全局 `DB_ALLOW_WRITE`/`DB_MAX_ROWS` 兜底。旧单方言：`set DB_DIALECT=mysql & set DB_PASSWORD=... & python -m mcp_server.server`。
-
-在 千问办公 / Claude / Cursor 客户端注册：把 `mcp_config.example.json` 里 `mcpServers.db-connector` 段合并进 MCP 配置，改好 `cwd` 与 `env`。（注：千问办公出于安全不允许 agent 自动注册 stdio MCP，需手动粘贴。）
-
-跑测试：
-
-```bash
-python tests/test_mcp_stdio.py --user root --password "你的密码"      # 关系型真实端到端
-python tests/test_mcp_multidialect.py                                # Redis/Mongo 护栏（无需服务）
-python tests/test_guard.py && python tests/test_guard_nosql.py && python tests/test_offline.py
-```
-
-## 快速使用 Redis / Mongo（库层 API，能力全开）
+第一步，选数据模型对应的模板。以关系型 PostgreSQL 为例，新建 `dbconnector/connectors/postgres.py`：
 
 ```python
-from dbconnector import connect
-
-# Redis
-with connect("redis", host="127.0.0.1", port=6379, database=0) as r:
-    r.set("user:1:name", "头儿", ttl=3600)      # 写
-    print(r.get("user:1:name"))                 # 读
-    print(r.scan(match="user:*", count=100))    # 只读遍历
-
-# MongoDB
-with connect("mongodb", host="127.0.0.1", user="admin",
-             password="xxx", database="app") as m:
-    m.insert_one("orders", {"sku": "ThinkPad", "qty": 2})
-    print(m.find("orders", {"sku": "ThinkPad"}, limit=5))
-    print(m.count("orders"))
-```
-
-## 扩展一种新数据库（可插拔示例）
-新增 `Postgres` 只需一个文件 `dbconnector/connectors/postgres.py`：
-
-```python
-from ..base import RelationalConnector      # 关系型族基类（DBConnector 是其兼容别名）
 from ..registry import register
+from ..templates.relational import RelationalConnector
 
 @register("postgres")
 class PostgresConnector(RelationalConnector):
-    dialect = "postgres"
     default_port = 5432
+    placeholder = "%s"
 
     @property
     def dbapi(self):
-        import psycopg            # 依赖驱动
+        import psycopg
         return psycopg
-
-    def _creator_name(self):
-        return "connect"          # psycopg 的连接函数名
 
     def _connect_kwargs(self):
         c = self.config
-        kw = {"host": c.host, "port": c.port or 5432,
-              "user": c.user, "password": c.password, "dbname": c.database}
+        kw = {"host": c.host, "port": c.port or 5432, "user": c.user,
+              "password": c.password, "dbname": c.database}
         kw.update(c.extra)
         return kw
 ```
 
-然后在 `dbconnector/connectors/__init__.py` 里 `from . import postgres`，
-即可 `connect("postgres", ...)`——**基类已经帮你实现了连接池、CRUD、事务、健康检查**，
-子类不用重写任何方法。注意不同方言的占位符：MySQL 用 `%s`，psycopg 也是 `%s`，
-SQL Server(pymssql) 用 `%s`，SQLite 用 `?`。
+在 `connectors/__init__.py` 增加对它的导入即可被 `connect("postgres", ...)` 使用；池、查询、事务、通用探查都由模板提供。若元数据视图不同（非 MySQL 的 information_schema），覆盖 `list_sources/describe_source` 即可。
 
-新增**非关系型**数据库则继承对应族中间基类：键值型继承 `KeyValueConnector`（照 `redis.py` 实现 `get/set/scan/command` + 三个探查方法），文档型继承 `DocumentConnector`（照 `mongodb.py` 实现 `find/insert/update/delete` + 探查方法），再 `@register("你的方言")`。
+非关系型同理：键值继承 `KeyValueConnector`（实现 `get/set/delete/exists/scan/command` + 三个探查方法），文档继承 `DocumentConnector`（实现 `find/insert_one/insert_many/update_one/delete/count`）。
 
-## 设计说明（确定 vs 权衡）
+以第三方包分发（不改本仓库）：在包的 `pyproject.toml` 声明
 
-- **事实**：两层抽象把"跨方言公共契约"（`BaseConnector`）与"数据模型族能力"（关系/键值/文档）分离。关系型方言差异只体现在 `dbapi` + `_connect_kwargs`（+ 可选 `_creator_name`）三处；`list_sources/describe_source/get_source` 有默认实现，方言可覆盖（如 Oracle/Mongo 元数据不同）。
-- **事实**：连接器能力全开、不含权限判断；读写裁剪全部下沉到 `mcp_server/guard.py` 使用层，按 `DB_ALLOW_WRITE` 与各只读白名单运行时生效——库层与 agent 层职责清晰。
-- **权衡**：`PooledDB` 默认 `ping=1`（每次取连接探活）偏稳健，牺牲一点吞吐换取"连接被服务端回收后自动重连"；可 `PoolConfig.ping=4` 提速。
-- **边界**：`close()` 对关系型仅置空池引用交 GC 归还；长驻服务退出前建议显式调用。Redis 无服务时构造不连接、命令时才报错，故无服务也能验证护栏。本库面向"查询 + 轻写入"，不含 ORM / 迁移 / 分库分表。
+```toml
+[project.entry-points."dbconnector.dialects"]
+clickhouse = "my_plugin.clickhouse"
+```
+
+安装后，`available_dialects()` 与 MCP 的 `sources` 会自动列出该方言，通用工具即刻可用。
+
+## 8. 测试
+
+```bash
+python tests/test_offline.py            # 注册表/配置/结果，无依赖
+python tests/test_guard.py              # SQL 只读护栏
+python tests/test_guard_nosql.py        # Redis/Mongo 护栏
+python tests/test_mcp_multidialect.py   # 族守卫/只读拒绝（无需真实服务）
+python tests/test_mcp_stdio.py --user root --password ...          # 关系型真实端到端
+python scripts/smoke_test.py --user root --password ... --database test   # 关系型全链路冒烟
+```
+
+## 9. 版本与许可
+
+版本 1.0.0 起为稳定基线；1.1.0 引入类型模板分层（`templates/`）、entry_points 插件发现、MCP 多源与面向 Agent 的自描述/安全增强，均向后兼容。许可证：MIT。

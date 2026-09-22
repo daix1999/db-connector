@@ -11,9 +11,9 @@ from typing import Any
 
 from ..config import ConnectorConfig
 from ..exceptions import ConnectionError_
-from ..nosql import KeyValueConnector
 from ..registry import register
 from ..result import Result
+from ..templates.keyvalue import KeyValueConnector
 
 
 @register("redis")
@@ -41,7 +41,8 @@ class RedisConnector(KeyValueConnector):
                     pool = redis.ConnectionPool(
                         host=cfg.host, port=cfg.port or self.default_port,
                         password=cfg.password, db=self._db_number(),
-                        decode_responses=True, **cfg.extra)
+                        decode_responses=True,
+                        socket_connect_timeout=5, socket_timeout=5, **cfg.extra)
             except Exception as e:
                 raise ConnectionError_(f"初始化 Redis 连接池失败: {e}") from e
             self._client = redis.Redis(connection_pool=pool)

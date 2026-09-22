@@ -11,9 +11,9 @@ from typing import Any
 
 from ..config import ConnectorConfig
 from ..exceptions import ConnectionError_
-from ..nosql import DocumentConnector
 from ..registry import register
 from ..result import Result
+from ..templates.document import DocumentConnector
 
 
 def _to_jsonable(v: Any) -> Any:

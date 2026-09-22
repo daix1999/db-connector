@@ -46,10 +46,10 @@ async def main():
         async with ClientSession(r, w) as s:
             await s.initialize()
             h = payload(await s.call_tool("health", {}))
-            check(results, "redis", h.get("dialect") == "redis" and h.get("family") == "redis")
+            check(results, "redis", h.get("dialect") == "redis" and h.get("family") == "keyvalue")
             # 写命令在只读模式被拦（网络前）
             d = await s.call_tool("redis_command", {"name": "SET", "args": ["k", "v"]})
-            check(results, "redis", d.is_error and "未开写" in d.content[0].text)
+            check(results, "redis", d.is_error and "只读" in d.content[0].text)
             # SQL 工具在 redis 方言被族守卫拦
             q = await s.call_tool("query", {"sql": "SELECT 1"})
             check(results, "redis", q.is_error and "relational" in q.content[0].text)
@@ -63,15 +63,15 @@ async def main():
         async with ClientSession(r, w) as s:
             await s.initialize()
             h = payload(await s.call_tool("health", {}))
-            check(results, "mongo", h.get("dialect") == "mongodb" and h.get("family") == "mongo")
+            check(results, "mongo", h.get("dialect") == "mongodb" and h.get("family") == "document")
             d = await s.call_tool("mongo_write", {"collection": "c", "operation": "insert",
                                                    "payload": {"a": 1}})
-            check(results, "mongo", d.is_error and "未开写" in d.content[0].text)
+            check(results, "mongo", d.is_error and "只读" in d.content[0].text)
             p = await s.call_tool("mongo_aggregate", {"collection": "c",
                                                       "pipeline": [{"$out": "x"}]})
-            check(results, "mongo", p.is_error and "未开写" in p.content[0].text)
+            check(results, "mongo", p.is_error and "只读" in p.content[0].text)
             q = await s.call_tool("redis_get", {"key": "k"})
-            check(results, "mongo", q.is_error and "redis" in q.content[0].text)
+            check(results, "mongo", q.is_error and "keyvalue" in q.content[0].text)
 
     print(f"\n{'全部通过 ✅' if all(results) else '存在失败 ❌'}  ({sum(results)}/{len(results)})")
     return 0 if all(results) else 1

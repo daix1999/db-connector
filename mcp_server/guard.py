@@ -71,13 +71,19 @@ def ensure_limit(sql: str, max_rows: int) -> str:
     return s
 
 
+def has_multiple_statements(sql: str) -> bool:
+    """去掉注释与结尾分号后仍含分号 => 拼接了多条语句（危险，写路径一律拒绝）。"""
+    trimmed = strip_comments(sql).rstrip().rstrip(";")
+    return ";" in trimmed
+
+
 # ======================================================================
 # NoSQL 只读判定（Redis / Mongo）——护栏只在"使用层"生效，连接器本身不限权
 # ======================================================================
 
 # Redis 只读命令白名单（大写）。不在名单里的一律视为写/危险命令。
 REDIS_READ_COMMANDS = {
-    "GET", "MGET", "GETRANGE", "STRLEN", "EXISTS", "TYPE", "KEYS", "SCAN",
+    "GET", "MGET", "GETRANGE", "STRLEN", "EXISTS", "TYPE", "SCAN",
     "TTL", "PTTL", "HGET", "HMGET", "HGETALL", "HKEYS", "HVALS", "HLEN", "HEXISTS",
     "HSCAN", "LRANGE", "LLEN", "LINDEX", "SMEMBERS", "SISMEMBER", "SCARD", "SSCAN",
     "SUNION", "SINTER", "SDIFF", "ZRANGE", "ZRANGEBYSCORE", "ZCARD", "ZSCORE", "ZSCAN",

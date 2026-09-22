@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..base import RelationalConnector
 from ..registry import register
+from ..templates.relational import RelationalConnector
 
 
 @register("mysql")

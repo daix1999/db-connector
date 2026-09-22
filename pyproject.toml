@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "db-connector"
-version = "1.0.0"
-description = "可插拔本地数据库连接器（两层抽象·多方言）：MySQL / Redis / MongoDB，含 stdio MCP server。"
+version = "1.1.0"
+description = "面向 agent 的可插拔数据库连接器（两层抽象·多数据模型）：MySQL / Redis / MongoDB，含 stdio MCP server。"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -27,5 +27,8 @@ all = ["redis>=5.0.0", "pymongo>=4.6", "mcp>=2.0.0"]
 [project.scripts]
 db-connector-mcp = "mcp_server.server:mcp.run"
 
+[project.entry-points."dbconnector.dialects"]
+# 内置方言通过包导入即注册；外部插件在此组声明自己的 entry point。
+
 [tool.setuptools]
-packages = ["dbconnector", "dbconnector.connectors", "mcp_server"]
+packages = ["dbconnector", "dbconnector.templates", "dbconnector.connectors", "mcp_server"]
