@@ -31,6 +31,7 @@ except Exception:  # pragma: no cover
 
 from dbconnector import create, dialect_info  # noqa: E402
 from mcp_server import guard  # noqa: E402
+from mcp_server.audit import audited  # noqa: E402
 from mcp_server.config import Source, ServerSettings, load_settings  # noqa: E402
 
 _settings: ServerSettings | None = None
@@ -100,6 +101,7 @@ def _allow_write(src: Source):
 
 # ---------- 源发现 + 通用探查（跨方言）----------
 @mcp.tool()
+@audited("sources")
 def sources() -> dict:
     """列出已配置的源与全部可注册方言。agent 应首先调用本工具再决定 source。"""
     configured = [{"name": n, "dialect": s.config.dialect, "family": _family_of(s),
@@ -114,6 +116,7 @@ def sources() -> dict:
 
 
 @mcp.tool()
+@audited("health")
 def health(source: str | None = None) -> dict:
     """某源连通性与元信息（方言/族/是否可写）。"""
     src = _resolve_source(source)
@@ -124,6 +127,7 @@ def health(source: str | None = None) -> dict:
 
 
 @mcp.tool()
+@audited("list_sources")
 def list_sources(source: str | None = None) -> dict:
     """列某源的数据单元：关系=表 / 文档=集合 / 键值=key 概览 / 向量=集合 …（统一接口）。"""
     src = _resolve_source(source)
@@ -134,6 +138,7 @@ def list_sources(source: str | None = None) -> dict:
 
 
 @mcp.tool()
+@audited("describe_source")
 def describe_source(name: str, source: str | None = None) -> dict:
     """描述某源某数据单元结构（字段/索引/key+TTL/集合维…）。"""
     src = _resolve_source(source)
@@ -146,6 +151,7 @@ def describe_source(name: str, source: str | None = None) -> dict:
 
 
 @mcp.tool()
+@audited("get_source")
 def get_source(name: str, limit: int = 20, source: str | None = None) -> dict:
     """取某源某数据单元样本（无需写 SQL，适合快速看数据长相）。"""
     src = _resolve_source(source)
@@ -160,6 +166,7 @@ def get_source(name: str, limit: int = 20, source: str | None = None) -> dict:
 
 # ---------- relational 族（SQL）----------
 @mcp.tool()
+@audited("query")
 def query(sql: str, params: list | None = None, source: str | None = None) -> dict:
     """只读 SQL（SELECT/SHOW/DESC/EXPLAIN），自动补 LIMIT。目标源须是 relational 族。"""
     src, conn = _target(source, "relational")
@@ -175,6 +182,7 @@ def query(sql: str, params: list | None = None, source: str | None = None) -> di
 
 
 @mcp.tool()
+@audited("execute")
 def execute(sql: str, params: list | None = None, source: str | None = None) -> dict:
     """写 SQL（INSERT/UPDATE/DELETE/DDL）。需该源 allow_write=true；禁止多语句拼接。"""
     src, conn = _target(source, "relational")
@@ -191,6 +199,7 @@ def execute(sql: str, params: list | None = None, source: str | None = None) -> 
 
 # ---------- keyvalue 族（Redis…）----------
 @mcp.tool()
+@audited("redis_get")
 def redis_get(key: str, source: str | None = None) -> dict:
     """读一个 key（按类型返回 string/hash/list/set/zset）。目标源须是 keyvalue 族。"""
     src, conn = _target(source, "keyvalue")
@@ -198,6 +207,7 @@ def redis_get(key: str, source: str | None = None) -> dict:
 
 
 @mcp.tool()
+@audited("redis_scan")
 def redis_scan(match: str = "*", count: int = 100, source: str | None = None) -> dict:
     """游标扫描 key（只读、非阻塞）。"""
     src, conn = _target(source, "keyvalue")
@@ -206,6 +216,7 @@ def redis_scan(match: str = "*", count: int = 100, source: str | None = None) ->
 
 
 @mcp.tool()
+@audited("redis_command")
 def redis_command(name: str, args: list | None = None, source: str | None = None) -> dict:
     """任意 Redis 命令。只读源仅放行白名单命令；写命令需 allow_write；危险命令始终拒绝。"""
     src, conn = _target(source, "keyvalue")
@@ -221,6 +232,7 @@ def redis_command(name: str, args: list | None = None, source: str | None = None
 
 # ---------- document 族（Mongo…）----------
 @mcp.tool()
+@audited("mongo_find")
 def mongo_find(collection: str, filter: dict | None = None, limit: int = 50,
                projection: dict | None = None, sort: list | None = None,
                source: str | None = None) -> dict:
@@ -232,6 +244,7 @@ def mongo_find(collection: str, filter: dict | None = None, limit: int = 50,
 
 
 @mcp.tool()
+@audited("mongo_count")
 def mongo_count(collection: str, filter: dict | None = None, source: str | None = None) -> dict:
     """统计集合文档数（只读）。"""
     src, conn = _target(source, "document")
@@ -239,6 +252,7 @@ def mongo_count(collection: str, filter: dict | None = None, source: str | None 
 
 
 @mcp.tool()
+@audited("mongo_aggregate")
 def mongo_aggregate(collection: str, pipeline: list, source: str | None = None) -> dict:
     """聚合查询。含 $out/$merge 的写型管道需该源 allow_write=true。"""
     src, conn = _target(source, "document")
@@ -249,6 +263,7 @@ def mongo_aggregate(collection: str, pipeline: list, source: str | None = None) 
 
 
 @mcp.tool()
+@audited("mongo_write")
 def mongo_write(collection: str, operation: str, payload, source: str | None = None) -> dict:
     """写操作：insert / insert_many / update / delete。需该源 allow_write=true。"""
     src, conn = _target(source, "document")

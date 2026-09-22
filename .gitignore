@@ -14,3 +14,7 @@ venv/
 # 测试快照/缓存
 .cache/
 .pytest_cache/
+
+# 操作审计日志（含 SQL，禁入库）
+logs/
+*.audit.jsonl

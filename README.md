@@ -134,12 +134,27 @@ with connect("mongodb", host="127.0.0.1", database="app") as m:
 - Mongo：聚合管道含 `$out/$merge` 视为写；`mongo_write` 仅接受显式白名单操作。
 - 标识符：表名等走字符白名单，避免拼进元数据查询造成注入；参数一律走驱动的参数化。
 
+### 操作审计日志
+
+每一次工具调用都会落一条结构化 JSON Lines（`mcp_server/audit.py`），记录：时间、`tool`、目标 `source`、参数摘要、结果（`ok` / `denied` / `error`）、耗时 `dur_ms`，成功时附带结果量（`rowcount` / `affected_rows` / `returned`）。用途是"事后查得到 agent 到底做了什么、被拦在哪"。
+
+- 默认开启，写到 `<cwd>/logs/db-connector-audit.jsonl`（该目录已在 `.gitignore` 中，含 SQL 不入库）。
+- 默认脱敏：保留 SQL 文本与标识符，`params/payload/filter` 等含业务值的参数只记形状不记值；确需全量设 `DB_AUDIT_PARAMS=1`。
+- 绝不记录连接凭据；审计写失败不影响主调用（尽力而为）。
+
+| 环境变量 | 默认 | 说明 |
+|---|---|---|
+| `DB_AUDIT` | `on` | 设 `off/0/false` 关闭审计 |
+| `DB_AUDIT_LOG` | `logs/db-connector-audit.jsonl` | 审计文件路径 |
+| `DB_AUDIT_PARAMS` | 关 | `1` 时记录参数值（敏感） |
+
+审计日志按天/大小轮转由部署侧处理（如需内置轮转可后续加）。
+
 运行须知（判断，非缺陷但需部署时考虑）：
 
 - 凭据以环境变量注入到连接器进程，属明文。仅在本机或受信主机使用；不要把 `DB_SOURCES` 提交进版本库（`.gitignore` 已排除 `.env`）。
 - 驱动默认明文连接本机。若连远程实例，请在对应源 `extra` 里开启 TLS（PyMySQL `ssl_ca`、Redis `ssl=True`、pymongo `tls=True`）。
 - Redis 写路径的命令名需匹配驱动方法（如删除用 `DEL` 在部分驱动下不等价 `delete`）；如需稳定批量写，建议为该族补专用写工具而非直接透传。
-- 本工具不内置操作审计日志；需要留痕时，在网关或数据库侧审计。
 
 ## 7. 扩展：接入一种新数据库
 
@@ -186,6 +201,7 @@ clickhouse = "my_plugin.clickhouse"
 python tests/test_offline.py            # 注册表/配置/结果，无依赖
 python tests/test_guard.py              # SQL 只读护栏
 python tests/test_guard_nosql.py        # Redis/Mongo 护栏
+python tests/test_audit.py              # 审计日志：脱敏/成功/拒绝/开关
 python tests/test_mcp_multidialect.py   # 族守卫/只读拒绝（无需真实服务）
 python tests/test_mcp_stdio.py --user root --password ...          # 关系型真实端到端
 python scripts/smoke_test.py --user root --password ... --database test   # 关系型全链路冒烟
@@ -193,4 +209,4 @@ python scripts/smoke_test.py --user root --password ... --database test   # 关�
 
 ## 9. 版本与许可
 
-版本 1.0.0 起为稳定基线；1.1.0 引入类型模板分层（`templates/`）、entry_points 插件发现、MCP 多源与面向 Agent 的自描述/安全增强，均向后兼容。许可证：MIT。
+版本 1.0.0 起为稳定基线；1.1.0 引入类型模板分层（`templates/`）、entry_points 插件发现、MCP 多源与面向 Agent 的自描述/安全增强；1.2.0 加入使用层操作审计日志（默认开启、脱敏）。均向后兼容。许可证：MIT。
