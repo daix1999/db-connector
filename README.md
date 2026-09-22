@@ -151,7 +151,7 @@ with connect("mongodb", host="127.0.0.1", database="app") as m:
 
 脱敏：保留 SQL 文本与标识符，`params/payload/filter` 等含业务值的参数默认只记形状；绝不记录连接凭据；审计写失败不影响主调用。轮转由部署侧处理。
 
-已知边界：显式 `transaction()` 块内的单条语句暂不逐条审计（记录到"开启了一次事务"这一层）。
+事务块：`transaction()` 内每条语句（execute/query/executemany）逐条审计，收尾再记一条汇总（提交=ok / 回滚=error + 原因 + 语句与写次数）。
 
 运行须知（判断，非缺陷但需部署时考虑）：
 
@@ -212,4 +212,4 @@ python scripts/smoke_test.py --user root --password ... --database test   # 关�
 
 ## 9. 版本与许可
 
-版本 1.0.0 起为稳定基线；1.1.0 引入类型模板分层（`templates/`）、entry_points 插件发现、MCP 多源与面向 Agent 的自描述/安全增强；1.2.0 加入使用层操作审计；1.3.0 将审计下沉到 BaseConnector，库直调与 MCP 双边界统一留痕。均向后兼容。许可证：MIT。
+版本 1.0.0 起为稳定基线；1.1.0 引入类型模板分层（`templates/`）、entry_points 插件发现、MCP 多源与面向 Agent 的自描述/安全增强；1.2.0 加入使用层操作审计；1.3.0 将审计下沉到 BaseConnector，库直调与 MCP 双边界统一留痕；1.3.1 补齐事务块内逐条语句审计。均向后兼容。许可证：MIT。

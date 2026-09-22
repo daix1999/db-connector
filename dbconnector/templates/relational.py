@@ -11,10 +11,12 @@
 from __future__ import annotations
 
 import threading
+import time
 from abc import abstractmethod
 from contextlib import contextmanager
 from typing import Any
 
+from .. import audit
 from ..base import BaseConnector
 from ..config import ConnectorConfig
 from ..exceptions import ConnectionError_, QueryError
@@ -28,8 +30,9 @@ class RelationalConnector(BaseConnector):
     #: 方言占位符风格，供上层文档/转换参考
     placeholder = "%s"
     #: 需自动审计的操作（fetch_one/fetch_value 会转成 query，不重复登记）
+    #: transaction 不在此列——由 transaction() 内部手动做逐条+汇总审计，避免重复/失真
     AUDITED_OPS = ("query", "execute", "execute_returning_id", "execute_many",
-                   "transaction", "list_sources", "describe_source", "get_source")
+                   "list_sources", "describe_source", "get_source")
 
     def __init__(self, config: ConnectorConfig):
         super().__init__(config)
@@ -153,17 +156,26 @@ class RelationalConnector(BaseConnector):
 
     @contextmanager
     def transaction(self):
+        """事务上下文：块内每条语句逐条审计；收尾再记一条汇总（提交/回滚结果）。"""
         conn = self._acquire()
         cur = conn.cursor()
+        tx = _Transaction(cur, self)
+        t0 = time.perf_counter()
+        outcome, err = "ok", None
         try:
-            yield _Transaction(cur)
+            yield tx
             conn.commit()
-        except Exception:
+        except Exception as e:
+            outcome, err = audit._classify(e), e
             try:
                 conn.rollback()
             finally:
                 raise
         finally:
+            audit.log_operation(
+                self, "transaction",
+                {"statements": tx.stmt_count, "writes": tx.write_count},
+                outcome=outcome, dur_ms=round((time.perf_counter() - t0) * 1000, 2), error=err)
             cur.close()
             conn.close()
 
@@ -194,18 +206,69 @@ DBConnector = RelationalConnector
 
 
 class _Transaction:
-    def __init__(self, cursor):
+    """绑定到事务游标的轻量执行器。块内每条语句发一条 connector 层审计。"""
+
+    _READ_PREFIX = ("SELECT", "SHOW", "DESC", "EXPLAIN", "PRAGMA", "WITH")
+
+    def __init__(self, cursor, owner):
         self._cur = cursor
+        self._owner = owner
+        self.stmt_count = 0
+        self.write_count = 0
+
+    def _audit(self, op, sql, params, outcome, dur_ms, result, err):
+        audit.log_operation(self._owner, op, {"sql": sql, "params": params},
+                            outcome=outcome, dur_ms=dur_ms, result=result, error=err)
 
     def execute(self, sql, params=None) -> int:
-        self._cur.execute(sql, params or ())
-        return self._cur.rowcount
+        t0 = time.perf_counter()
+        outcome, err, rc = "ok", None, 0
+        try:
+            self._cur.execute(sql, params or ())
+            rc = self._cur.rowcount
+            return rc
+        except Exception as e:
+            outcome, err = audit._classify(e), e
+            raise
+        finally:
+            self.stmt_count += 1
+            head = sql.lstrip().split(None, 1)[0].upper() if sql.strip() else ""
+            if head not in self._READ_PREFIX:
+                self.write_count += 1
+            self._audit("transaction.execute", sql, params, outcome,
+                        round((time.perf_counter() - t0) * 1000, 2),
+                        None if err else {"affected_rows": rc}, err)
 
     def query(self, sql, params=None) -> list[dict[str, Any]]:
-        self._cur.execute(sql, params or ())
-        _, rows = RelationalConnector._read(self._cur)
-        return rows
+        t0 = time.perf_counter()
+        outcome, err, rows = "ok", None, None
+        try:
+            self._cur.execute(sql, params or ())
+            _, rows = RelationalConnector._read(self._cur)
+            return rows
+        except Exception as e:
+            outcome, err = audit._classify(e), e
+            raise
+        finally:
+            self.stmt_count += 1
+            self._audit("transaction.query", sql, params, outcome,
+                        round((time.perf_counter() - t0) * 1000, 2),
+                        None if err else {"rowcount": len(rows or [])}, err)
 
     def executemany(self, sql, seq_params) -> int:
-        self._cur.executemany(sql, seq_params)
-        return self._cur.rowcount
+        t0 = time.perf_counter()
+        outcome, err, rc = "ok", None, 0
+        try:
+            self._cur.executemany(sql, seq_params)
+            rc = self._cur.rowcount
+            return rc
+        except Exception as e:
+            outcome, err = audit._classify(e), e
+            raise
+        finally:
+            self.stmt_count += 1
+            self.write_count += 1
+            n = len(seq_params) if seq_params else 0
+            self._audit("transaction.executemany", sql, {"batch": n}, outcome,
+                        round((time.perf_counter() - t0) * 1000, 2),
+                        None if err else {"affected_rows": rc}, err)

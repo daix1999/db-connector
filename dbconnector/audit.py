@@ -148,6 +148,24 @@ def _classify(exc: Exception) -> str:
     return "denied" if type(exc).__name__ in {"ToolError", "PermissionError", "ValueError"} else "error"
 
 
+def connector_identity(conn) -> dict:
+    """从连接器实例派生审计身份。"""
+    cfg = getattr(conn, "config", None)
+    return {"dialect": getattr(conn, "dialect", None),
+            "data_model": getattr(conn, "data_model", None),
+            "label": getattr(conn, "source_label", None) or getattr(cfg, "label", None),
+            "host": getattr(cfg, "host", None), "database": getattr(cfg, "database", None)}
+
+
+def log_operation(conn, op: str, args: dict, *, outcome="ok", dur_ms=0.0,
+                  result=None, error=None, layer="connector") -> None:
+    """公共入口：记录一条连接器层操作。供自动包装与事务内手动埋点复用。"""
+    if not _layer_enabled(layer):
+        return
+    emit(layer, identity=connector_identity(conn), op=op, args=args,
+         outcome=outcome, dur_ms=dur_ms, detail=_result_detail(result), error=error)
+
+
 def audited(tool_name: str, layer: str = "mcp", identity=None):
     """装饰器：MCP 工具用（layer=mcp）。identity 可为静态 dict 或 callable。"""
     def deco(fn):
@@ -184,15 +202,10 @@ def wrap_operation(fn, op_name: str):
             outcome, err = _classify(e), e
             raise
         finally:
-            ident = {"dialect": getattr(self, "dialect", None),
-                     "data_model": getattr(self, "data_model", None),
-                     "label": getattr(self, "source_label", None) or getattr(self.config, "label", None),
-                     "host": self.config.host, "database": self.config.database}
-            # 位置参数按函数形参名映射，便于脱敏
             named = _bind_args(fn, self, args, kwargs)
-            emit("connector", identity=ident, op=op_name, args=named,
-                 outcome=outcome, dur_ms=round((time.perf_counter() - t0) * 1000, 2),
-                 detail=_result_detail(result), error=err)
+            log_operation(self, op_name, named, outcome=outcome,
+                          dur_ms=round((time.perf_counter() - t0) * 1000, 2),
+                          result=result, error=err)
     wrapper._audited = True
     return wrapper
 

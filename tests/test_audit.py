@@ -120,6 +120,56 @@ def test_double_wrap_prevented():
     assert len([r for r in _lines(log) if r["op"] == "do"]) == 1
 
 
+# ---- 事务块内逐条审计（离线，假游标，不依赖数据库）----
+class _FakeCursor:
+    def __init__(self): self.rowcount = 1; self.description = None
+    def execute(self, sql, params=None): self.rowcount = 1
+    def executemany(self, sql, seq): self.rowcount = len(seq)
+    def fetchall(self): return []
+    def close(self): pass
+
+class _FakeConn:
+    def __init__(self): self.finalized = None
+    def cursor(self): return _FakeCursor()
+    def commit(self): self.finalized = "commit"
+    def rollback(self): self.finalized = "rollback"
+    def close(self): pass
+
+
+def _fake_relational():
+    from dbconnector.connectors.mysql import MySQLConnector
+    db = MySQLConnector(ConnectorConfig(dialect="mysql", host="h", database="d", label="txlab"))
+    db._acquire = lambda: _FakeConn()
+    return db
+
+
+def test_transaction_per_statement_audit():
+    log = _tmp_log(); _env(log)
+    db = _fake_relational()
+    with db.transaction() as tx:
+        tx.execute("INSERT INTO t(v) VALUES(%s)", ("机密",))
+        tx.query("SELECT * FROM t")
+    recs = _lines(log)
+    ops = [r["op"] for r in recs]
+    assert "transaction.execute" in ops and "transaction.query" in ops and "transaction" in ops
+    summ = [r for r in recs if r["op"] == "transaction"][0]
+    assert summ["outcome"] == "ok" and summ["args"] == {"statements": 2, "writes": 1}
+    assert "机密" not in json.dumps(recs, ensure_ascii=False)   # 参数值仍脱敏
+
+
+def test_transaction_rollback_audit():
+    log = _tmp_log(); _env(log)
+    db = _fake_relational()
+    try:
+        with db.transaction() as tx:
+            tx.execute("DELETE FROM t")
+            raise RuntimeError("boom")
+    except RuntimeError:
+        pass
+    summ = [r for r in _lines(log) if r["op"] == "transaction"][0]
+    assert summ["outcome"] == "error" and "boom" in summ["error"]
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for f in fns:
