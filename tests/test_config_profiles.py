@@ -49,9 +49,9 @@ def test_profile_plus_inline_override():
     ])
     s = C.load_settings()
     a = s.sources["ops"].access
-    assert a.grant_max == levels.READ                      # 来自 prod 档
-    assert a.allow_escalation is True                      # 来自 prod 档
-    assert a.write_deny == ["secret_t"]                    # 内联补充
+    assert a.grant_max == levels.DESTRUCTIVE              # 来自 prod 档（硬上限）
+    assert a.confirm_from == levels.WRITE_DATA            # 来自 prod 档（≥数据写需确认）
+    assert a.write_deny == ["secret_t"]                   # 内联补充
 
 
 def test_relative_profile_path_resolves():

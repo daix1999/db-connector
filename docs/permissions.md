@@ -37,36 +37,37 @@ connector.authorize(access, op, args)
 ```jsonc
 "access": {
   "read": true,
-  "grant": "read",              // 免确认直达的最高级：read | read+data | read+schema | read+destructive | admin
+  "grant": "read",              // 硬上限：该环境最多做到哪级 read | read+data | read+schema | read+destructive
+  "confirm_from": null,         // 从哪级起需要确认令牌；默认 = grant（即到顶也不用确认）。设低了就"某级以上先确认"
   "write_allow": ["sales.*"],   // 可选：给了就只允许这些目标(库.表 / collection / key 前缀，glob)可写
-  "write_deny":  ["sales.audit"],// 黑名单，命中必拒，优先于白名单
-  "confirm_above": null,        // 超过该级需确认；默认=grant
-  "allow_escalation": false     // true：允许用一次性确认令牌越权到 T3（破坏性）
+  "write_deny":  ["sales.audit"] // 黑名单，命中必拒，优先于白名单
 }
 ```
 
-从只读到全权的阶梯（`grant`）：
+只有**两个权限旋钮**：`grant`（最高可达，含确认）+ `confirm_from`（确认起点，默认=grant）。规则一句话：**`level < confirm_from` 直接放行 · `confirm_from ≤ level ≤ grant` 需确认 · `level > grant` 拒绝**；`READ` 看 `read` 开关，`ADMIN` 命令恒拒。
 
-| grant | 免确认可达 | 典型用途 |
-|---|---|---|
-| `read` | T0 | **默认**，agent 只读 |
-| `read+data` | ≤T1 | 允许常规数据写 |
-| `read+schema` | ≤T2 | 允许建表/改结构 |
-| `read+destructive` | ≤T3 | 允许 DROP 等（高危，慎用） |
-| `admin` | ≤T4 | 理论最高；但 ADMIN 级命令仍被 decide 硬拒 |
+典型档位：
 
-## 决策逻辑（`mcp_server/guard.decide`）
+| 想要的效果 | access |
+|---|---|
+| 纯只读 | `{"grant":"read"}` |
+| 只读，但任何写需人工确认（可升到破坏性） | `{"grant":"read+destructive","confirm_from":"read+data"}` |
+| 放开数据写、拒绝结构/破坏 | `{"grant":"read+data"}` |
+| 测试库全权（免确认，仍拒 ADMIN） | `{"grant":"read+destructive"}` |
+
+## 决策逻辑（`dbconnector/acl.decide`）
 
 ```
-allow_ceiling = min(grant_max, confirm_above)
-level == READ       -> 放行(若 read)，否则拒绝
-level == ADMIN      -> 拒绝（永久）
+level == READ       -> read 开则放行，否则拒绝
+level >= ADMIN      -> 拒绝（永久）
 目标命中 write_deny -> 拒绝
 给了 write_allow 且目标不在其中 -> 拒绝
-level <= allow_ceiling            -> 放行
-level <= T3 且 allow_escalation   -> 需要确认（返回确认令牌）
-否则                              -> 拒绝（超出授权）
+level > grant                  -> 拒绝（超出该环境最高授权）
+level >= confirm_from          -> 需要确认（返回确认令牌）
+否则                           -> 放行
 ```
+
+> 兼容旧字段：`allow_escalation` / `confirm_above` 会被自动翻译成上面两旋钮（grant 提到破坏性、confirm_from=旧grant+1 等），老配置不用改即可运行。
 
 ## 确认流（agent 二次调用）
 
@@ -89,8 +90,8 @@ level <= T3 且 allow_escalation   -> 需要确认（返回确认令牌）
 - **权限档 profile** 让同类环境共享一套权限（缓存一档、业务库一档），个别环境引用档后再内联微调：
 
 ```jsonc
-// env DB_ACCESS_PROFILES
-{"prod":{"grant":"read","allow_escalation":true},
+// env DB_ACCESS_PROFILES（或写进 access_profiles.json 用 DB_ACCESS_PROFILE_FILE 引用）
+{"prod":{"grant":"read+destructive","confirm_from":"read+data"},
  "sandbox":{"grant":"read+destructive"},
  "cache":{"grant":"read+data"}}
 

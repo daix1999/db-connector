@@ -1,9 +1,8 @@
 {
-  "_comment": "可复用权限档。source 的 access 填这里的档名即可；也可 {\"profile\":\"档名\", ...内联覆盖}。授权对象=连接目标(source)，无角色。字段见 docs/permissions.md。",
-  "readonly":   { "read": true, "grant": "read" },
-  "prod":       { "read": true, "grant": "read", "allow_escalation": true },
-  "biz-write":  { "read": true, "grant": "read+data", "write_deny": ["audit_log", "*_credential"] },
-  "cache":      { "read": true, "grant": "read+data" },
-  "sandbox":    { "read": true, "grant": "read+destructive", "allow_escalation": true },
-  "admin":      { "read": true, "grant": "admin" }
+  "_comment": "可复用权限档。source 的 access 填这里的档名即可；也可 {\"profile\":\"档名\", ...内联覆盖}。只有两个权限旋钮：grant(最高可达级/硬上限) 与 confirm_from(从哪级起需确认，默认=grant即不额外确认)。ADMIN 命令恒拒。授权对象=连接 source，无角色。见 docs/permissions.md。",
+  "readonly":  { "read": true, "grant": "read" },
+  "prod":      { "read": true, "grant": "read+destructive", "confirm_from": "read+data" },
+  "biz-write": { "read": true, "grant": "read+data", "write_deny": ["audit_log", "*_credential"] },
+  "cache":     { "read": true, "grant": "read+data" },
+  "sandbox":   { "read": true, "grant": "read+destructive" }
 }

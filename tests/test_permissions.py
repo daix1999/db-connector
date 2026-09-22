@@ -74,7 +74,7 @@ async def run(a):
                                                         "params": ["x"], "source": "rw"}))
             ck("grant=read+data 时 INSERT 放行", ins.get("affected_rows") == 1)
             drp = await s.call_tool("execute", {"sql": "DROP TABLE rw_t", "source": "rw"})
-            ck("grant=read+data 时 DROP 被拒(无升级)", drp.is_error and "超出授权" in drp.content[0].text)
+            ck("grant=read+data 时 DROP 被拒(无升级)", drp.is_error and "超出" in drp.content[0].text)
 
             # confirm: DROP 先要确认，带令牌二次执行
             c1 = await s.call_tool("execute", {"sql": "DROP TABLE rw_t", "source": "confirm"})

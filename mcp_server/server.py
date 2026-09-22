@@ -115,8 +115,8 @@ def _authorize(src: Source, conn, op: str, args: dict, confirm: str | None):
 def _access_view(src: Source) -> dict:
     a = src.access
     return {"read": a.read, "grant": levels.level_name(a.grant_max),
-            "write_allow": a.write_allow, "write_deny": a.write_deny,
-            "allow_escalation": a.allow_escalation}
+            "confirm_from": levels.level_name(a.confirm_from),
+            "write_allow": a.write_allow, "write_deny": a.write_deny}
 
 
 # ---------- 源发现 + 通用探查（跨方言）----------
