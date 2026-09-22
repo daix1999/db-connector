@@ -1,9 +1,5 @@
 {
-  "_readme": "集成示例：一个连接器 = 一个插件集 + 多个运行环境(source)。同一个 mysql 插件被多个环境复用，各环境通过 access 引用可复用的权限档(profile)，个别环境再内联微调。授权对象是连接目标(source)本身，无角色。改 cwd/密码后合并进 千问办公 MCP 配置；默认最安全(prod 类只读)。",
-  "_env_notes": {
-    "DB_ACCESS_PROFILES": "权限档字典(JSON)。可复用：缓存一档、业务库一档。",
-    "DB_SOURCES": "环境列表(JSON)。每项 access 可为：档名字符串 / 内联 dict / {\"profile\":\"档名\", ...覆盖}。"
-  },
+  "_readme": "集成示例：一个连接器 = 一组插件 + 多个运行环境(source)。权限档写在 access_profiles.json（DB_ACCESS_PROFILE_FILE 引用），source 用 access 填档名或 {profile+覆盖}。同一个 mysql 插件被多个环境复用、各挂不同权限。改 cwd/密码后合并进 千问办公 MCP 配置。",
   "mcpServers": {
     "db-connector": {
       "type": "stdio",
@@ -11,20 +7,19 @@
       "args": ["-m", "mcp_server.server"],
       "cwd": "C:\\Users\\Administrator\\.qwenworkcn\\workspace\\mu9a4nao0bpihtne\\outputs\\db-connector",
       "env": {
-        "DB_ACCESS_PROFILES": "{\"prod\":{\"read\":true,\"grant\":\"read\",\"allow_escalation\":true},\"sandbox\":{\"read\":true,\"grant\":\"read+destructive\",\"allow_escalation\":true},\"cache\":{\"read\":true,\"grant\":\"read+data\"},\"report\":{\"read\":true,\"grant\":\"read\"}}",
-        "DB_SOURCES": "[{\"name\":\"mysql8-prod\",\"dialect\":\"mysql\",\"host\":\"127.0.0.1\",\"port\":3306,\"user\":\"app_ro\",\"password\":\"<生产只读账号密码>\",\"database\":\"biz\",\"access\":\"prod\"},{\"name\":\"mysql57-sandbox\",\"dialect\":\"mysql\",\"host\":\"127.0.0.1\",\"port\":3307,\"user\":\"root\",\"password\":\"<测试库密码>\",\"database\":\"legacy\",\"access\":\"sandbox\"},{\"name\":\"mysql8-docker\",\"dialect\":\"mysql\",\"host\":\"127.0.0.1\",\"port\":3308,\"user\":\"root\",\"password\":\"<容器测试密码>\",\"database\":\"dockertest\",\"access\":\"sandbox\"},{\"name\":\"redis-cache\",\"dialect\":\"redis\",\"host\":\"127.0.0.1\",\"port\":6379,\"database\":\"0\",\"access\":\"cache\"},{\"name\":\"redis-sessions\",\"dialect\":\"redis\",\"host\":\"127.0.0.1\",\"port\":6379,\"database\":\"1\",\"access\":\"prod\"},{\"name\":\"mongo-analytics\",\"dialect\":\"mongodb\",\"host\":\"127.0.0.1\",\"port\":27017,\"database\":\"analytics\",\"access\":\"report\"},{\"name\":\"mysql8-prod-strict\",\"dialect\":\"mysql\",\"host\":\"127.0.0.1\",\"port\":3306,\"user\":\"app\",\"password\":\"<密码>\",\"database\":\"biz\",\"access\":{\"profile\":\"prod\",\"write_deny\":[\"audit_log\",\"user_credential\"]}}]",
+        "DB_ACCESS_PROFILE_FILE": "access_profiles.json",
+        "DB_SOURCES": "[{\"name\":\"mysql8-prod\",\"dialect\":\"mysql\",\"host\":\"127.0.0.1\",\"port\":3306,\"user\":\"app_ro\",\"password\":\"<生产只读账号密码>\",\"database\":\"biz\",\"access\":\"prod\"},{\"name\":\"mysql57-sandbox\",\"dialect\":\"mysql\",\"host\":\"127.0.0.1\",\"port\":3307,\"user\":\"root\",\"password\":\"<测试库密码>\",\"database\":\"legacy\",\"access\":\"sandbox\"},{\"name\":\"redis-cache\",\"dialect\":\"redis\",\"host\":\"127.0.0.1\",\"port\":6379,\"database\":\"0\",\"access\":\"cache\"},{\"name\":\"mongo-analytics\",\"dialect\":\"mongodb\",\"host\":\"127.0.0.1\",\"port\":27017,\"database\":\"analytics\",\"access\":\"readonly\"},{\"name\":\"mysql8-ops\",\"dialect\":\"mysql\",\"host\":\"127.0.0.1\",\"port\":3306,\"user\":\"app\",\"password\":\"<密码>\",\"database\":\"biz\",\"access\":{\"profile\":\"prod\",\"confirm_above\":\"read\"}}]",
         "DB_MAX_ROWS": "200",
         "DB_AUDIT": "on",
         "DB_AUDIT_LAYER": "all",
-        "DB_CONFIRM_TTL": "300",
-        "DB_CONFIRM_SECRET": "<随机串;不设则每进程随机、重启即作废>"
+        "DB_CONFIRM_TTL": "300"
       },
-      "_source_legend": {
-        "mysql8-prod / mysql8-prod-strict": "生产(8.0) → prod 档：只读；写/DROP 需确认令牌；strict 版再禁写 audit_log/user_credential",
-        "mysql57-sandbox / mysql8-docker": "测试(5.7:3307 / docker:3308) → sandbox 档：给到破坏性、免确认（同插件不同环境不同权限）",
+      "_legend": {
+        "mysql8-prod": "生产 → prod 档：只读；写/DROP 需确认",
+        "mysql57-sandbox": "测试(5.7) → sandbox 档：给到破坏性免确认（同插件不同环境）",
         "redis-cache": "缓存 → cache 档：读+数据写",
-        "redis-sessions": "会话 → prod 档：只读为主",
-        "mongo-analytics": "报表 → report 档：只读"
+        "mongo-analytics": "报表 → readonly 档：只读",
+        "mysql8-ops": "引用 prod 档 + 内联 confirm_above 覆盖（演示 档+微调）"
       }
     }
   }

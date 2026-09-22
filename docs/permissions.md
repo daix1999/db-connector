@@ -105,6 +105,8 @@ level <= T3 且 allow_escalation   -> 需要确认（返回确认令牌）
 
 解析优先级：内联字段 > profile。`source` 名要能区分环境（含实例/端口/用途），MCP 工具用 `source` 参数路由到对应环境与权限。
 
+> 权限档可不写进 env：把字典放进仓库里的 `access_profiles.json`，用 `DB_ACCESS_PROFILE_FILE`（绝对或相对 cwd 路径）引用；若同时给了 `DB_ACCESS_PROFILES`，内联项覆盖同名文件档，便于临时调整。缺文件/未知档名一律回落到最安全的 `readonly`。
+
 ## 向后兼容
 
 无 `access` 时：

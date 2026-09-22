@@ -66,9 +66,23 @@ class ServerSettings:
 
 
 def _load_profiles() -> dict:
-    """全局权限档：env DB_ACCESS_PROFILES（JSON dict，档名 -> access 定义）。"""
+    """权限档来源：文件(DB_ACCESS_PROFILE_FILE) 打底，env(DB_ACCESS_PROFILES) 覆盖合并。"""
+    profiles: dict = {}
+    path = _env("DB_ACCESS_PROFILE_FILE")
+    if path:
+        if not os.path.isabs(path):
+            path = os.path.join(os.getcwd(), path)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                profiles.update(json.load(f))
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            raise RuntimeError(f"解析 DB_ACCESS_PROFILE_FILE={path} 失败: {e}") from e
     raw = _env("DB_ACCESS_PROFILES")
-    return json.loads(raw) if raw else {}
+    if raw:
+        profiles.update(json.loads(raw))   # 内联优先级高于文件，便于临时覆盖
+    return profiles
 
 
 def _resolve_access_dict(item: dict, profiles: dict) -> dict | None:

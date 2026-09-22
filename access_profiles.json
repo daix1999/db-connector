@@ -1,0 +1,9 @@
+{
+  "_comment": "可复用权限档。source 的 access 填这里的档名即可；也可 {\"profile\":\"档名\", ...内联覆盖}。授权对象=连接目标(source)，无角色。字段见 docs/permissions.md。",
+  "readonly":   { "read": true, "grant": "read" },
+  "prod":       { "read": true, "grant": "read", "allow_escalation": true },
+  "biz-write":  { "read": true, "grant": "read+data", "write_deny": ["audit_log", "*_credential"] },
+  "cache":      { "read": true, "grant": "read+data" },
+  "sandbox":    { "read": true, "grant": "read+destructive", "allow_escalation": true },
+  "admin":      { "read": true, "grant": "admin" }
+}
